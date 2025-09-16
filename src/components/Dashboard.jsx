@@ -183,9 +183,6 @@ const Dashboard = () => {
             return { sections: [], summary: 'Falha ao processar a avaliação. Usando soma calculada como fallback.', finalScore: fallbackFinalScore, rawText: text };
         }
     };
-    // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    // FIM DA LÓGICA DE PARSING
-    // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
     const fetchMeetings = async (forceRefresh = false) => {
