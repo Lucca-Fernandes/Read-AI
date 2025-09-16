@@ -29,7 +29,7 @@ const Dashboard = () => {
 
     const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
     const SPREADSHEET_ID = import.meta.env.VITE_SPREADSHEET_ID;
-    const RANGE = 'Página1!A1:L50';
+    const RANGE = 'Página1!A:L';
     const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
@@ -254,8 +254,9 @@ const Dashboard = () => {
     };
 
     const evaluateMeetingWithGemini = async (meeting) => {
-        if (!meeting.transcript || meeting.transcript.trim().length < 50) {
-            return { score: 0, evaluationText: 'Não realizada (transcrição insuficiente).' };
+        const nonConductedSummary = "No summary available due to limited meeting data.";
+        if ((meeting.summary || '').trim() === nonConductedSummary) {
+            return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
         }
 
         try {
@@ -274,7 +275,7 @@ const Dashboard = () => {
 
 **1. Progresso do Aluno (Peso Total: 50 pontos)**
    - Perguntou sobre a semana do aluno? (5 pontos):
-   - Verificou a conclusão da meta anterior? (10 pontos):
+   - O aluno concluiu a meta anterior? (10 pontos): Se o monitor verificou porém o aluno não concluiu, a pontuação é 5. Caso tenha concluido, ou superado a meta a nota é 10. 
    - Estipulou uma nova meta para o aluno? (10 pontos):
    - Perguntou sobre o conteúdo estudado? (20 pontos):
    - Perguntou sobre os exercícios? (5 pontos):
@@ -306,7 +307,7 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
             // LÓGICA DE PARSING ANTIGA REMOVIDA
             // A NOVA LÓGICA USA A FUNÇÃO parseEvaluationText
             const { finalScore } = parseEvaluationText(responseText);
-            
+
             return { score: finalScore, evaluationText: responseText };
 
         } catch (err) {
