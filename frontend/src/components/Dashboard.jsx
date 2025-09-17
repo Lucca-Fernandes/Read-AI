@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Grid,
   Typography,
@@ -12,51 +12,39 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InsightsIcon from '@mui/icons-material/Insights';
 import axios from 'axios';
+import { format } from 'date-fns';
 
 import MeetingCard from './MeetingCard';
 import Filters from './Filters';
 import DashboardChart from './DashboardChart';
-
-// Função auxiliar para fazer o parse de JSON de forma segura
-const safeJsonParse = (jsonString, defaultValue = []) => {
-  try {
-    // Se a string for nula ou vazia, retorna o valor padrão imediatamente
-    if (!jsonString) {
-      return defaultValue;
-    }
-    return JSON.parse(jsonString);
-  } catch (error) {
-    // Se o parse falhar, retorna o valor padrão
-    console.error("Falha ao fazer parse do JSON:", jsonString, error);
-    return defaultValue;
-  }
-};
-
 
 const Dashboard = () => {
   const [originalMeetings, setOriginalMeetings] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
   const [filter, setFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
   const [chartData, setChartData] = useState([]);
 
-  useEffect(() => {
-    fetchMeetings();
-  }, []);
-
-  async function fetchMeetings() {
+  const fetchMeetings = useCallback(async (start, end) => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:3000/api/meetings');
+      let url = 'http://localhost:3000/api/meetings';
+      
+      if (start && end) {
+        const formattedStart = format(start, 'yyyy-MM-dd');
+        const formattedEnd = format(end, 'yyyy-MM-dd');
+        url += `?startDate=${formattedStart}&endDate=${formattedEnd}`;
+      }
+      
+      const response = await axios.get(url);
       
       const formattedMeetings = response.data.map(meeting => ({
           ...meeting,
-          // Usamos a nova função segura para evitar erros
-          topics: safeJsonParse(meeting.topics, []),
-          chapters: safeJsonParse(meeting.chapters, []),
-          participants: safeJsonParse(meeting.participants, []),
           evaluationText: meeting.evaluation_text 
       }));
 
@@ -67,10 +55,21 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  // EFEITO APRIMORADO: Só busca quando o intervalo de datas está completo ou limpo
+  useEffect(() => {
+    if ((startDate && endDate) || (!startDate && !endDate)) {
+      fetchMeetings(startDate, endDate);
+    }
+  }, [startDate, endDate, fetchMeetings]);
+
+  const handleSetDateRange = (start, end) => {
+    setStartDate(start);
+    setEndDate(end);
+  };
 
   useEffect(() => {
-    if (originalMeetings.length === 0) return;
     let processedMeetings = [...originalMeetings];
     if (keyword.trim() !== '') {
       const lowerCaseKeyword = keyword.toLowerCase();
@@ -118,13 +117,14 @@ const Dashboard = () => {
   const handleTitleClick = () => {
     setFilter('all');
     setKeyword('');
+    handleSetDateRange(null, null);
   };
 
   const handleRefresh = async () => {
     setLoading(true);
     try {
       await axios.post('http://localhost:3000/api/update');
-      await fetchMeetings(); 
+      await fetchMeetings(startDate, endDate); 
       setError(null);
     } catch (err) {
       setError(`Falha ao atualizar as reuniões: ${err.message}`);
@@ -140,13 +140,8 @@ const Dashboard = () => {
           <Box
             onClick={handleTitleClick}
             sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: { xs: 1, sm: 2 },
-              mb: 5,
-              cursor: 'pointer',
-              '&:hover': { transform: 'scale(1.025)' }
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: { xs: 1, sm: 2 },
+              mb: 5, cursor: 'pointer', '&:hover': { transform: 'scale(1.025)' }
             }}
           >
             <InsightsIcon
@@ -154,14 +149,11 @@ const Dashboard = () => {
               sx={{ fontSize: { xs: '2.5rem', sm: '3.5rem' }, color: 'primary.main' }}
             />
             <Typography
-              className="title-text"
-              variant="h3"
-              component="h1"
+              className="title-text" variant="h3" component="h1"
               sx={{
                 fontWeight: 800,
                 background: (theme) => `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.secondary.main} 90%)`,
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent'
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent'
               }}
             >
               Painel de Análises
@@ -170,27 +162,30 @@ const Dashboard = () => {
         </Tooltip>
       </Fade>
 
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', mb: 4 }}>
-        <Box sx={{ flexGrow: 1 }}>
-          <Filters
-            filter={filter}
-            setFilter={setFilter}
-            keyword={keyword}
-            setKeyword={setKeyword}
-          />
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mb: 4 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+            <Box sx={{ flexGrow: 1 }}>
+              <Filters
+                filter={filter}
+                setFilter={setFilter}
+                keyword={keyword}
+                setKeyword={setKeyword}
+                startDate={startDate}
+                setStartDate={setStartDate}
+                endDate={endDate}
+                setEndDate={setEndDate}
+                onDateFilter={handleSetDateRange}
+              />
+            </Box>
+            <Tooltip title="Recarregar e avaliar novas reuniões">
+              <Button
+                variant="contained" color="secondary" onClick={handleRefresh}
+                startIcon={<RefreshIcon />} sx={{ height: '56px' }} disabled={loading}
+              >
+                {loading ? 'Atualizando...' : 'Atualizar'}
+              </Button>
+            </Tooltip>
         </Box>
-        <Tooltip title="Recarregar e avaliar novas reuniões">
-          <Button
-            variant="contained"
-            color="secondary"
-            onClick={handleRefresh}
-            startIcon={<RefreshIcon />}
-            sx={{ height: '56px' }}
-            disabled={loading}
-          >
-            {loading ? 'Atualizando...' : 'Atualizar'}
-          </Button>
-        </Tooltip>
       </Box>
 
       <Fade in={chartData.length > 0} timeout={800}>

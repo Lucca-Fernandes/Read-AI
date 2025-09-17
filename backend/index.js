@@ -82,20 +82,20 @@ const parseEvaluationText = (text) => {
   } catch (error) {
     console.error("Falha ao parsear o texto de avaliação:", error);
     const fallbackScores = {
-      week: text.match(/Perguntou sobre a semana do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      content: text.match(/Perguntou sobre o conteúdo estudado\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      exercises: text.match(/Perguntou sobre os exercícios\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      organization: text.match(/Demonstrou boa condução e organização\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      extraSupport: text.match(/Ofereceu apoio extra\s*\(dicas, recursos\)\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      goalFeedback: text.match(/Feedback sobre a meta\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      languageReducer: text.match(/Uso de linguagem informal ou inadequada\?\s*[:\-]?\s*(-?\d+)/i)?.[1] || 0,
+        week: text.match(/Perguntou sobre a semana do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        content: text.match(/Perguntou sobre o conteúdo estudado\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        exercises: text.match(/Perguntou sobre os exercícios\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        organization: text.match(/Demonstrou boa condução e organização\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        extraSupport: text.match(/Ofereceu apoio extra\s*\(dicas, recursos\)\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        goalFeedback: text.match(/Feedback sobre a meta\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+        languageReducer: text.match(/Uso de linguagem informal ou inadequada\?\s*[:\-]?\s*(-?\d+)/i)?.[1] || 0,
     };
     const fallbackFinalScore = Object.values(fallbackScores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
     return { sections: [], summary: 'Falha ao processar a avaliação. Usando soma calculada como fallback.', finalScore: fallbackFinalScore, rawText: text };
@@ -104,11 +104,9 @@ const parseEvaluationText = (text) => {
 
 const evaluateMeetingWithGemini = async (meeting) => {
     const nonConductedSummary = "No summary available due to limited meeting data.";
-
     if ((meeting.summary || '').trim() === nonConductedSummary) {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
     }
-
     try {
         const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
 
@@ -150,14 +148,11 @@ const evaluateMeetingWithGemini = async (meeting) => {
 
 Resumo (Contexto Secundário): ${meeting.summary}
 TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
-
+        
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
-        
         const { finalScore } = parseEvaluationText(responseText);
-
         return { score: finalScore, evaluationText: responseText };
-
     } catch (err) {
         console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
         return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
@@ -200,13 +195,29 @@ async function fetchFromSheets() {
 
 app.get('/api/meetings', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM meetings ORDER BY start_time DESC');
+        const { startDate, endDate } = req.query;
+
+        let query = 'SELECT * FROM meetings';
+        const queryParams = [];
+
+        if (startDate && endDate) {
+            const adjustedEndDate = new Date(endDate);
+            adjustedEndDate.setDate(adjustedEndDate.getDate() + 1);
+
+            query += ' WHERE start_time >= $1 AND start_time < $2';
+            queryParams.push(startDate, adjustedEndDate.toISOString().split('T')[0]);
+        }
+
+        query += ' ORDER BY start_time DESC';
+
+        const result = await pool.query(query, queryParams);
         res.json(result.rows);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
+
 
 app.post('/api/update', async (req, res) => {
     try {
