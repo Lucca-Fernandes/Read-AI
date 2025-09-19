@@ -4,6 +4,10 @@ const { Pool } = require('pg');
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(express.json());
@@ -18,11 +22,13 @@ const pool = new Pool({
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+
+// --- FUNÇÕES AUXILIARES ---
 
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
+    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
   try {
     const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -57,22 +63,6 @@ const parseEvaluationText = (text) => {
         });
         return;
       }
-      const reducerRegex = /- (Uso de linguagem informal.*?)\s*\(-(\d+) pontos se sim, 0 se não\):\s*(-?\d+)/;
-      const reducerMatch = line.match(reducerRegex);
-      if (reducerMatch) {
-        const reducerSection = {
-          title: "Redutor de Linguagem",
-          maxPoints: -parseInt(reducerMatch[2], 10),
-          isReducer: true,
-          criteria: [{
-            text: reducerMatch[1].trim(),
-            maxPoints: -parseInt(reducerMatch[2], 10),
-            awardedPoints: parseInt(reducerMatch[3], 10),
-            justification: ""
-          }]
-        };
-        sections.push(reducerSection);
-      }
     });
     if (currentSection) sections.push(currentSection);
     const finalScore = sections.reduce((total, section) => {
@@ -81,24 +71,7 @@ const parseEvaluationText = (text) => {
     return { sections, summary, finalScore };
   } catch (error) {
     console.error("Falha ao parsear o texto de avaliação:", error);
-    const fallbackScores = {
-        week: text.match(/Perguntou sobre a semana do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        content: text.match(/Perguntou sobre o conteúdo estudado\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        exercises: text.match(/Perguntou sobre os exercícios\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        organization: text.match(/Demonstrou boa condução e organização\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        extraSupport: text.match(/Ofereceu apoio extra\s*\(dicas, recursos\)\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        goalFeedback: text.match(/Feedback sobre a meta\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-        languageReducer: text.match(/Uso de linguagem informal ou inadequada\?\s*[:\-]?\s*(-?\d+)/i)?.[1] || 0,
-    };
-    const fallbackFinalScore = Object.values(fallbackScores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
-    return { sections: [], summary: 'Falha ao processar a avaliação. Usando soma calculada como fallback.', finalScore: fallbackFinalScore, rawText: text };
+    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1, rawText: text };
   }
 };
 
@@ -124,7 +97,7 @@ const evaluateMeetingWithGemini = async (meeting) => {
 **1. Progresso do Aluno (Peso Total: 50 pontos)**
    - Perguntou sobre a semana do aluno? (5 pontos):
    - Verificou a conclusão da meta anterior? (10 pontos):
-   - Estipulou uma nova meta para o aluno? (10 pontos):
+   - Estipou uma nova meta para o aluno? (10 pontos):
    - Perguntou sobre o conteúdo estudado? (20 pontos):
    - Perguntou sobre os exercícios? (5 pontos):
 
@@ -168,12 +141,11 @@ async function fetchFromSheets() {
     const response = await axios.get(url);
     const rows = response.data.values || [];
     
-    return rows.slice(1).map((row, index) => ({
-        id: index + 1,
+    return rows.slice(1).map((row) => ({
         session_id: row[0] || 'unknown',
         meeting_title: row[1] || 'Sem título',
-        start_time: row[2] || '',
-        end_time: row[3] || '',
+        start_time: row[2] || null,
+        end_time: row[3] || null,
         owner_name: row[4] ? row[4].trim() : 'Desconhecido',
         summary: row[5] || 'Sem resumo',
         topics: row[6] ? row[6].split(',').filter(t => t && t.toLowerCase() !== 'nenhum' && t.trim() !== '') : [],
@@ -193,23 +165,154 @@ async function fetchFromSheets() {
     }));
 }
 
-app.get('/api/meetings', async (req, res) => {
+// --- ROTAS DE AUTENTICAÇÃO ---
+
+app.post('/api/register', async (req, res) => {
+    const { name, email, password, role = 'monitor' } = req.body;
+    if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
+    }
+    if (!email.endsWith('@projetodesenvolve.com.br')) {
+        return res.status(400).json({ error: 'Apenas emails com o domínio @projetodesenvolve.com.br são permitidos.' });
+    }
+    try {
+        const salt = await bcrypt.genSalt(10);
+        const password_hash = await bcrypt.hash(password, salt);
+        const newUser = await pool.query(
+            "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
+            [name, email, password_hash, role]
+        );
+        res.status(201).json(newUser.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Email já cadastrado ou erro no servidor.' });
+    }
+});
+
+app.post('/api/login', async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+        return res.status(400).json({ error: 'Email e senha são obrigatórios.' });
+    }
+    try {
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (userResult.rows.length === 0) {
+            return res.status(401).json({ error: 'Credenciais inválidas.' });
+        }
+        const user = userResult.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password_hash);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Credenciais inválidas.' });
+        }
+        const payload = { id: user.id, name: user.name, email: user.email, role: user.role };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
+        res.json({ token, user: payload });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+});
+
+// --- ROTAS DE REDEFINIÇÃO DE SENHA ---
+
+app.post('/api/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    try {
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (userResult.rows.length === 0) {
+            return res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
+        }
+        const user = userResult.rows[0];
+        const token = crypto.randomBytes(32).toString('hex');
+        const expires = new Date(Date.now() + 3600000); // 1 hora
+        await pool.query(
+            "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
+            [token, expires, email]
+        );
+        const transporter = nodemailer.createTransport({
+            service: process.env.EMAIL_SERVICE,
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS,
+            },
+        });
+        const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: user.email,
+            subject: 'Redefinição de Senha - Painel de Análises',
+            text: `Você está recebendo este email porque solicitou a redefinição da sua senha.\n\n` +
+                  `Por favor, clique no link abaixo ou cole no seu navegador para completar o processo:\n\n` +
+                  `http://localhost:5173/reset-password/${token}\n\n` +
+                  `Se você não solicitou isso, por favor, ignore este email e sua senha permanecerá inalterada.\n`
+        };
+        await transporter.sendMail(mailOptions);
+        res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao processar a solicitação.' });
+    }
+});
+
+app.post('/api/reset-password/:token', async (req, res) => {
+    const { token } = req.params;
+    const { password } = req.body;
+    try {
+        const userResult = await pool.query(
+            "SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_expires > NOW()",
+            [token]
+        );
+        if (userResult.rows.length === 0) {
+            return res.status(400).json({ error: 'Token de redefinição de senha inválido ou expirado.' });
+        }
+        const user = userResult.rows[0];
+        const salt = await bcrypt.genSalt(10);
+        const password_hash = await bcrypt.hash(password, salt);
+        await pool.query(
+            "UPDATE users SET password_hash = $1, reset_password_token = NULL, reset_password_expires = NULL WHERE id = $2",
+            [password_hash, user.id]
+        );
+        res.status(200).json({ message: 'Senha redefinida com sucesso!' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao redefinir a senha.' });
+    }
+});
+
+// --- MIDDLEWARE DE AUTENTICAÇÃO ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+};
+
+// --- ROTAS DA APLICAÇÃO ---
+
+app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
-
+        const { role, name } = req.user;
         let query = 'SELECT * FROM meetings';
         const queryParams = [];
-
+        let whereClauses = [];
+        if (role !== 'admin') {
+            queryParams.push(name);
+            whereClauses.push(`owner_name = $${queryParams.length}`);
+        }
         if (startDate && endDate) {
             const adjustedEndDate = new Date(endDate);
             adjustedEndDate.setDate(adjustedEndDate.getDate() + 1);
-
-            query += ' WHERE start_time >= $1 AND start_time < $2';
             queryParams.push(startDate, adjustedEndDate.toISOString().split('T')[0]);
+            whereClauses.push(`start_time >= $${queryParams.length - 1} AND start_time < $${queryParams.length}`);
         }
-
+        if (whereClauses.length > 0) {
+            query += ' WHERE ' + whereClauses.join(' AND ');
+        }
         query += ' ORDER BY start_time DESC';
-
         const result = await pool.query(query, queryParams);
         res.json(result.rows);
     } catch (err) {
@@ -218,22 +321,18 @@ app.get('/api/meetings', async (req, res) => {
     }
 });
 
-
-app.post('/api/update', async (req, res) => {
+app.post('/api/update', authenticateToken, async (req, res) => {
     try {
         const sheetsMeetings = await fetchFromSheets();
         const existingIds = (await pool.query('SELECT session_id FROM meetings')).rows.map(r => r.session_id);
         const newMeetings = sheetsMeetings.filter(m => !existingIds.includes(m.session_id));
-
         if (newMeetings.length === 0) {
             return res.json({ message: 'Nenhuma nova reunião encontrada para adicionar.' });
         }
-
         const evaluated = await Promise.all(newMeetings.map(async (m) => {
             const { score, evaluationText } = await evaluateMeetingWithGemini(m);
             return { ...m, score, evaluation_text: evaluationText };
         }));
-
         for (const m of evaluated) {
             await pool.query(`
                 INSERT INTO meetings (

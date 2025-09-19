@@ -13,12 +13,13 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import InsightsIcon from '@mui/icons-material/Insights';
 import axios from 'axios';
 import { format } from 'date-fns';
-
-import MeetingCard from './MeetingCard';
-import Filters from './Filters';
-import DashboardChart from './DashboardChart';
+import MeetingCard from '../components/MeetingCard';
+import Filters from '../components/Filters';
+import DashboardChart from '../components/DashboardChart';
+import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
+  const { user, logout } = useAuth();
   const [originalMeetings, setOriginalMeetings] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -51,13 +52,16 @@ const Dashboard = () => {
       setOriginalMeetings(formattedMeetings);
       setError(null);
     } catch (err) {
-      setError(`Falha ao carregar reuniões: ${err.message}`);
+      if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+        logout();
+      } else {
+        setError(`Falha ao carregar reuniões: ${err.message}`);
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [logout]);
 
-  // EFEITO APRIMORADO: Só busca quando o intervalo de datas está completo ou limpo
   useEffect(() => {
     if ((startDate && endDate) || (!startDate && !endDate)) {
       fetchMeetings(startDate, endDate);
@@ -109,7 +113,7 @@ const Dashboard = () => {
         average: Math.round(monitorStats[name].totalScore / monitorStats[name].count),
         count: monitorStats[name].count,
       }))
-      .filter(monitor => monitor.count >= 2)
+      .filter(monitor => monitor.count >= 2) // O gráfico só aparece se o monitor tiver 2 ou mais reuniões
       .sort((a, b) => b.average - a.average);
     setChartData(monitorAverages);
   }, [originalMeetings]);
@@ -127,7 +131,11 @@ const Dashboard = () => {
       await fetchMeetings(startDate, endDate); 
       setError(null);
     } catch (err) {
-      setError(`Falha ao atualizar as reuniões: ${err.message}`);
+       if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+        logout();
+      } else {
+        setError(`Falha ao atualizar as reuniões: ${err.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -135,6 +143,15 @@ const Dashboard = () => {
 
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, maxWidth: 1600, mx: 'auto' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
+          <Typography variant="h6">
+              Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
+          </Typography>
+          <Button variant="outlined" color="secondary" onClick={logout}>
+              Sair
+          </Button>
+      </Box>
+
       <Fade in timeout={800}>
         <Tooltip title="Clique para resetar os filtros" arrow placement="bottom">
           <Box
@@ -144,12 +161,9 @@ const Dashboard = () => {
               mb: 5, cursor: 'pointer', '&:hover': { transform: 'scale(1.025)' }
             }}
           >
-            <InsightsIcon
-              className="title-icon"
-              sx={{ fontSize: { xs: '2.5rem', sm: '3.5rem' }, color: 'primary.main' }}
-            />
+            <InsightsIcon sx={{ fontSize: { xs: '2.5rem', sm: '3.5rem' }, color: 'primary.main' }} />
             <Typography
-              className="title-text" variant="h3" component="h1"
+              variant="h3" component="h1"
               sx={{
                 fontWeight: 800,
                 background: (theme) => `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.secondary.main} 90%)`,
@@ -188,6 +202,7 @@ const Dashboard = () => {
         </Box>
       </Box>
 
+      {/* A CORREÇÃO ESTÁ AQUI: A condição "user.role === 'admin'" foi removida */}
       <Fade in={chartData.length > 0} timeout={800}>
         <Box mb={5}>
           <DashboardChart chartData={chartData} />
@@ -208,7 +223,7 @@ const Dashboard = () => {
       ) : (
         <Grid container spacing={3}>
           {meetings.map((meeting) => (
-            <Grid key={meeting.id} item xs={12} sm={6} md={4}>
+            <Grid key={meeting.id} xs={12} sm={6} md={4}> {/* Removida prop 'item' para compatibilidade com MUI v5+ */}
               <MeetingCard meeting={meeting} />
             </Grid>
           ))}
