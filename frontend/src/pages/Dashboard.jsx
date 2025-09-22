@@ -34,7 +34,7 @@ const Dashboard = () => {
   const fetchMeetings = useCallback(async (start, end) => {
     setLoading(true);
     try {
-      let url = 'http://localhost:3000/api/meetings';
+      let url = `${import.meta.env.VITE_API_URL}/api/meetings`;
       
       if (start && end) {
         const formattedStart = format(start, 'yyyy-MM-dd');
@@ -127,7 +127,9 @@ const Dashboard = () => {
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      await axios.post('http://localhost:3000/api/update');
+      await axios.post(`${import.meta.env.VITE_API_URL}/api/update`, {}, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       await fetchMeetings(startDate, endDate); 
       setError(null);
     } catch (err) {
@@ -202,7 +204,6 @@ const Dashboard = () => {
         </Box>
       </Box>
 
-      {/* A CORREÇÃO ESTÁ AQUI: A condição "user.role === 'admin'" foi removida */}
       <Fade in={chartData.length > 0} timeout={800}>
         <Box mb={5}>
           <DashboardChart chartData={chartData} />

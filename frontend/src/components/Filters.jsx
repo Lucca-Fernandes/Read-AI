@@ -59,7 +59,6 @@ const Filters = ({
           />
         </Grid>
 
-        {/* --- LINHA 2: Filtro de Datas --- */}
         <Grid item xs={12}>
             <Divider sx={{ my: 2 }} />
         </Grid>
@@ -81,7 +80,6 @@ const Filters = ({
             />
         </Grid>
         <Grid item xs={12} sm={6} md={8} sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
-            {/* O botão "Filtrar Período" foi removido */}
             <Button variant="outlined" onClick={() => handleSetLastDays(7)}>Últimos 7 dias</Button>
             <Button variant="outlined" onClick={() => handleSetLastDays(30)}>Últimos 30 dias</Button>
             <Button variant="text" onClick={handleClear}>Limpar Datas</Button>

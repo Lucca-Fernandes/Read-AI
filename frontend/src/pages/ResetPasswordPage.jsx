@@ -32,8 +32,8 @@ const ResetPasswordPage = () => {
             return;
         }
 
-        try {
-            const response = await axios.post(`http://localhost:3000/api/reset-password/${token}`, { password });
+          try {
+            const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/reset-password/${token}`, { password });
             setSnackbar({ open: true, message: response.data.message + ' Você será redirecionado para o login.' });
             setTimeout(() => {
                 navigate('/login');

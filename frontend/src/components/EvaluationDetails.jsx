@@ -18,7 +18,6 @@ import GppBadIcon from '@mui/icons-material/GppBad';
 import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import ScoreboardIcon from '@mui/icons-material/Scoreboard';
 
-// Função auxiliar para determinar a cor do ícone e do chip com base na pontuação
 const getScoreStatus = (awarded, max) => {
   if (awarded < 0) return 'error';
   if (awarded === 0) return 'error';

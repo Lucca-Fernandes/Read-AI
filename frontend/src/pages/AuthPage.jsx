@@ -60,7 +60,7 @@ const AuthPage = () => {
                 return;
             }
             try {
-                await axios.post('http://localhost:3000/api/register', { name, email, password });
+                await axios.post(`${import.meta.env.VITE_API_URL}/api/register`, { name, email, password });
                 setSnackbar({ open: true, message: 'Usuário registrado com sucesso! Faça o login.' });
                 setView('login');
                 setName('');
@@ -76,7 +76,7 @@ const AuthPage = () => {
         e.preventDefault();
         setError('');
         try {
-            await axios.post('http://localhost:3000/api/forgot-password', { email });
+            await axios.post(`${import.meta.env.VITE_API_URL}/api/forgot-password`, { email });
             setSnackbar({ open: true, message: 'Se houver uma conta com este email, um link foi enviado.' });
             setView('login');
         } catch (err) {

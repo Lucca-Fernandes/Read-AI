@@ -50,7 +50,6 @@ const MeetingCard = ({ meeting }) => {
     };
 
     const handleScoreClick = () => {
-        // Só abre o modal se houver uma avaliação para mostrar (score não é nulo)
         if (meeting && meeting.score !== null) {
             setModalOpen(true);
         }
