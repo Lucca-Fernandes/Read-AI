@@ -34,10 +34,11 @@ app.use(cors({
 }));
 
 
-// Use a string de conexão única se a variável DATABASE_URL estiver disponível (melhor para Vercel)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    // Se não estiver usando DATABASE_URL, o Pool tentará usar as variáveis PG... do ambiente.
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 
