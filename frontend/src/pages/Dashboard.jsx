@@ -19,7 +19,7 @@ import DashboardChart from '../components/DashboardChart';
 import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, token } = useAuth();
   const [originalMeetings, setOriginalMeetings] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(false);
