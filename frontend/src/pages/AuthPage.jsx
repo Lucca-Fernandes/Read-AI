@@ -32,10 +32,6 @@ const monitorNames = [
     "Talita Linhares",
     "Gustavo Felippe",
     "Ryan Cruz",
-    "Mariana Dias",
-    "Maycon",
-    "Lucca Fernandes",
-    "Gustavo Vieira"
 ];
 
 const AuthPage = () => {
