@@ -20,7 +20,6 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite requisições sem 'origin' (como de apps mobile ou Postman) e as da nossa lista.
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -43,10 +42,10 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-// Lógica de parsing unificada para SEMPRE somar os critérios, garantindo a nota correta.
+// Esta função agora apenas soma os critérios. A decisão de reavaliar é feita fora dela.
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
+    return { summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
   
   try {
@@ -82,7 +81,6 @@ const parseEvaluationText = (text) => {
           awardedPoints: parseInt(criteriaMatch[3], 10),
           justification: (criteriaMatch[4] || '').trim(),
         });
-        return;
       }
     });
 
@@ -92,25 +90,27 @@ const parseEvaluationText = (text) => {
         const finalScore = sections.reduce((total, section) => {
           return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
         }, 0);
-        return { sections, summary, finalScore };
+        return { summary, finalScore };
     }
     
-    // Se não encontrou nenhuma seção de critérios, marca como falha.
-    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
+    return { summary, finalScore: 0 };
 
   } catch (error) {
     console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
-    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1, rawText: text };
+    return { summary: 'Falha ao processar a avaliação.', finalScore: -1 };
   }
 };
 
+// Nova função de avaliação com lógica de Plano A e Plano B
 const evaluateMeetingWithGemini = async (meeting) => {
     const nonConductedSummary = "No summary available due to limited meeting data.";
     if ((meeting.summary || '').trim() === nonConductedSummary) {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
     }
+    
     try {
-        const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
+        // --- PLANO A: Tenta a avaliação detalhada ---
+        const detailedPrompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
 
 **TAREFA:**
 
@@ -119,7 +119,6 @@ const evaluateMeetingWithGemini = async (meeting) => {
 3.  Liste la pontuação de cada subcritério de forma explícita.
 4.  Some todas as pontuações para calcular o Score Final.
 5.  Apresente um resumo da sua análise.
-6.  No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
 
 **CRITÉRIOS DE AVALIAÇÃO:**
 
@@ -151,10 +150,35 @@ const evaluateMeetingWithGemini = async (meeting) => {
 Resumo (Contexto Secundário): ${meeting.summary}
 TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim();
-        const { finalScore } = parseEvaluationText(responseText);
-        return { score: finalScore, evaluationText: responseText };
+        const detailedResult = await model.generateContent(detailedPrompt);
+        const detailedResponseText = detailedResult.response.text().trim();
+        
+        let { finalScore, summary } = parseEvaluationText(detailedResponseText);
+
+        // --- VERIFICAÇÃO DE FALHA E EXECUÇÃO DO PLANO B ---
+        if (finalScore === 0 && summary && summary.length > 20) {
+            console.warn(`Plano A falhou para a sessão ${meeting.session_id}. A soma deu 0. Ativando Plano B.`);
+
+            const simplePrompt = `Baseado nos critérios de avaliação (Progresso do Aluno, Qualidade do Atendimento, Engajamento, Risco e Feedback), analise a transcrição a seguir e forneça APENAS o número da pontuação final (de 0 a 100). Não inclua texto, justificativas ou a palavra 'pontos'. Responda somente com o número.
+
+TRANSCRIÇÃO:
+${meeting.transcript}`;
+
+            const simpleResult = await model.generateContent(simplePrompt);
+            const simpleResponseText = simpleResult.response.text().trim();
+            const scoreFromPlanB = parseInt(simpleResponseText, 10);
+
+            if (!isNaN(scoreFromPlanB)) {
+                finalScore = scoreFromPlanB;
+                console.log(`Plano B bem-sucedido. Nova nota para a sessão ${meeting.session_id}: ${finalScore}`);
+            } else {
+                console.error(`Plano B falhou para a sessão ${meeting.session_id}. A resposta não foi um número: "${simpleResponseText}". Marcando como falha (-1).`);
+                finalScore = -1;
+            }
+        }
+        
+        return { score: finalScore, evaluationText: detailedResponseText };
+
     } catch (err) {
         console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
         return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
@@ -233,7 +257,7 @@ app.post('/api/login', async (req, res) => {
         if (!isMatch) {
             return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; // Token expira em 8 horas
+        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) };
         const token = jwt.sign(payload, process.env.JWT_SECRET);
         res.json({ token, user: payload });
     } catch (err) {
@@ -241,8 +265,6 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
-
-// --- ROTAS DE REDEFINIÇÃO DE SENHA ---
 
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
@@ -253,7 +275,7 @@ app.post('/api/forgot-password', async (req, res) => {
         }
         const user = userResult.rows[0];
         const token = crypto.randomBytes(32).toString('hex');
-        const expires = new Date(Date.now() + 3600000); // 1 hora
+        const expires = new Date(Date.now() + 3600000);
         await pool.query(
             "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
             [token, expires, email]
@@ -265,7 +287,6 @@ app.post('/api/forgot-password', async (req, res) => {
                 pass: process.env.EMAIL_PASS,
             },
         });
-
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
@@ -310,7 +331,6 @@ app.post('/api/reset-password/:token', async (req, res) => {
     }
 });
 
-// --- MIDDLEWARE DE AUTENTICAÇÃO ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -318,14 +338,12 @@ const authenticateToken = (req, res, next) => {
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) {
             console.error('Erro na verificação do token:', err);
-            return res.sendStatus(403); // Forbidden
+            return res.sendStatus(403);
         }
         req.user = user;
         next();
     });
 };
-
-// --- ROTAS DA APLICAÇÃO ---
 
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
