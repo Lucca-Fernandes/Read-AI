@@ -34,7 +34,8 @@ const monitorNames = [
     "Ryan Cruz",
     "Mariana Dias",
     "Maycon",
-    "Lucca"
+    "Lucca Fernandes",
+    "Gustavo Vieira"
 ];
 
 const AuthPage = () => {
