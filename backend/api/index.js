@@ -11,15 +11,35 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: 'http://localhost:5173' }));
 
+
+// 👇 ALTERAÇÃO 1: CONFIGURAÇÃO DE CORS 👇
+// Adicionamos as URLs que podem acessar sua API.
+// A de localhost é para seu ambiente de desenvolvimento.
+// A outra é um placeholder para a URL do seu frontend quando ele estiver no ar.
+const allowedOrigins = [
+    'http://localhost:5173',
+    process.env.FRONTEND_URL // Vamos criar essa variável de ambiente na Vercel
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // Permite requisições sem 'origin' (como de apps mobile ou Postman) e as da nossa lista.
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    }
+}));
+
+
+// Use a string de conexão única se a variável DATABASE_URL estiver disponível (melhor para Vercel)
 const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+    connectionString: process.env.DATABASE_URL,
+    // Se não estiver usando DATABASE_URL, o Pool tentará usar as variáveis PG... do ambiente.
 });
+
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
@@ -32,29 +52,18 @@ const parseEvaluationText = (text) => {
   }
   
   try {
-    // --- LÓGICA DE PARSING MELHORADA ---
-
-    // 1. (PRIORIDADE) Tenta extrair o score final da linha explícita. É mais robusto.
     const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
     const scoreMatch = text.match(finalScoreRegex);
 
     if (scoreMatch && scoreMatch[1]) {
       const finalScoreFromLine = parseInt(scoreMatch[1], 10);
-      
-      // Remove a linha FINAL_SCORE do texto principal para não aparecer no resumo
       const cleanText = text.replace(finalScoreRegex, '').trim();
-      
       const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
       const summaryMatch = cleanText.match(summaryRegex);
       const summary = summaryMatch ? summaryMatch[1].trim() : 'Resumo não encontrado.';
-      
-      // Retorna o score confiável e um resumo limpo.
-      // O parsing das seções se torna opcional ou pode ser feito no frontend se necessário.
       return { sections: [], summary, finalScore: finalScoreFromLine };
     }
 
-    // 2. (FALLBACK) Se a linha FINAL_SCORE não for encontrada, usa o método antigo.
-    // Isso mantém a compatibilidade caso a IA esqueça de adicionar a linha.
     console.warn("AVISO: A linha 'FINAL_SCORE:' não foi encontrada. Calculando a partir dos critérios.");
 
     const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -95,8 +104,6 @@ const parseEvaluationText = (text) => {
 
     if (currentSection) sections.push(currentSection);
 
-    // Se a soma ainda der 0, mas existe texto, é mais provável que seja um erro de parsing.
-    // Retornar -1 (Falha na Análise) é mais seguro do que 0 (Não Realizada).
     if (sections.length > 0) {
         const finalScore = sections.reduce((total, section) => {
           return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
@@ -104,7 +111,6 @@ const parseEvaluationText = (text) => {
         return { sections, summary, finalScore };
     }
     
-    // Se não encontrou nem a linha FINAL_SCORE nem as seções, marca como falha.
     return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
 
   } catch (error) {
@@ -242,8 +248,8 @@ app.post('/api/login', async (req, res) => {
         if (!isMatch) {
             return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-        const payload = { id: user.id, name: user.name, email: user.email, role: user.role };
-        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
+        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; // Token expira em 8 horas
+        const token = jwt.sign(payload, process.env.JWT_SECRET);
         res.json({ token, user: payload });
     } catch (err) {
         console.error(err);
@@ -274,13 +280,18 @@ app.post('/api/forgot-password', async (req, res) => {
                 pass: process.env.EMAIL_PASS,
             },
         });
+
+        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
+        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+
         const mailOptions = {
             from: process.env.EMAIL_USER,
             to: user.email,
             subject: 'Redefinição de Senha - Painel de Análises',
             text: `Você está recebendo este email porque solicitou a redefinição da sua senha.\n\n` +
                   `Por favor, clique no link abaixo ou cole no seu navegador para completar o processo:\n\n` +
-                  `http://localhost:5173/reset-password/${token}\n\n` +
+                  `${resetLink}\n\n` +
                   `Se você não solicitou isso, por favor, ignore este email e sua senha permanecerá inalterada.\n`
         };
         await transporter.sendMail(mailOptions);
@@ -322,7 +333,10 @@ const authenticateToken = (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1];
     if (token == null) return res.sendStatus(401);
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403);
+        if (err) {
+            console.error('Erro na verificação do token:', err);
+            return res.sendStatus(403); // Forbidden
+        }
         req.user = user;
         next();
     });
@@ -394,5 +408,9 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+// A Vercel gerencia a porta, então não precisamos mais de app.listen
+// const PORT = process.env.PORT || 3000;
+// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+
+// Exporta o app para a Vercel
+module.exports = app;
