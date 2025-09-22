@@ -29,6 +29,7 @@ const monitorNames = [
     "Isabela Jales",
     "Lucas Fernandes Garcia",
     "Pedro Resende",
+    "Talita Linhares"
     // Adicione outros nomes de monitores aqui
 ];
 

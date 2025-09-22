@@ -30,16 +30,44 @@ const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
     return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
+  
   try {
+    // --- LÓGICA DE PARSING MELHORADA ---
+
+    // 1. (PRIORIDADE) Tenta extrair o score final da linha explícita. É mais robusto.
+    const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
+    const scoreMatch = text.match(finalScoreRegex);
+
+    if (scoreMatch && scoreMatch[1]) {
+      const finalScoreFromLine = parseInt(scoreMatch[1], 10);
+      
+      // Remove a linha FINAL_SCORE do texto principal para não aparecer no resumo
+      const cleanText = text.replace(finalScoreRegex, '').trim();
+      
+      const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
+      const summaryMatch = cleanText.match(summaryRegex);
+      const summary = summaryMatch ? summaryMatch[1].trim() : 'Resumo não encontrado.';
+      
+      // Retorna o score confiável e um resumo limpo.
+      // O parsing das seções se torna opcional ou pode ser feito no frontend se necessário.
+      return { sections: [], summary, finalScore: finalScoreFromLine };
+    }
+
+    // 2. (FALLBACK) Se a linha FINAL_SCORE não for encontrada, usa o método antigo.
+    // Isso mantém a compatibilidade caso a IA esqueça de adicionar a linha.
+    console.warn("AVISO: A linha 'FINAL_SCORE:' não foi encontrada. Calculando a partir dos critérios.");
+
     const lines = text.split('\n').filter(line => line.trim() !== '');
     const sections = [];
     let currentSection = null;
     let summary = '';
-    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*?)(?=FINAL_SCORE:|$)/;
+    
+    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
     const summaryMatch = text.match(summaryRegex);
     if (summaryMatch) {
       summary = summaryMatch[1].trim();
     }
+
     lines.forEach(line => {
       const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
       const headerMatch = line.match(sectionHeaderRegex);
@@ -64,13 +92,23 @@ const parseEvaluationText = (text) => {
         return;
       }
     });
+
     if (currentSection) sections.push(currentSection);
-    const finalScore = sections.reduce((total, section) => {
-      return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
-    }, 0);
-    return { sections, summary, finalScore };
+
+    // Se a soma ainda der 0, mas existe texto, é mais provável que seja um erro de parsing.
+    // Retornar -1 (Falha na Análise) é mais seguro do que 0 (Não Realizada).
+    if (sections.length > 0) {
+        const finalScore = sections.reduce((total, section) => {
+          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+        }, 0);
+        return { sections, summary, finalScore };
+    }
+    
+    // Se não encontrou nem a linha FINAL_SCORE nem as seções, marca como falha.
+    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
+
   } catch (error) {
-    console.error("Falha ao parsear o texto de avaliação:", error);
+    console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
     return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1, rawText: text };
   }
 };
@@ -85,12 +123,12 @@ const evaluateMeetingWithGemini = async (meeting) => {
 
 **TAREFA:**
 
-1. Para CADA UM dos subcritérios listados abaixo, atribua uma pontuação.
-2. A pontuação de cada subcritério deve ser o valor máximo indicado se o critério foi totalmente cumprido, ou 0 se não foi cumprido ou se a informação não está na transcrição.
-3. Liste a pontuação de cada subcritério de forma explícita.
-4. Some todas as pontuações para calcular o Score Final.
-5. Apresente um resumo da sua análise.
-6. No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
+1.  Para CADA UM dos subcritérios listados abaixo, atribua uma pontuação.
+2.  A pontuação de cada subcritério deve ser o valor máximo indicado se o critério foi totalmente cumprido, ou 0 se não foi cumprido ou se a informação não está na transcrição.
+3.  Liste la pontuação de cada subcritério de forma explícita.
+4.  Some todas as pontuações para calcular o Score Final.
+5.  Apresente um resumo da sua análise.
+6.  No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
 
 **CRITÉRIOS DE AVALIAÇÃO:**
 
