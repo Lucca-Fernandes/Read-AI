@@ -31,11 +31,14 @@ const monitorNames = [
     "Pedro Resende",
     "Talita Linhares",
     "Gustavo Felippe",
-    "Ryan Cruz"
+    "Ryan Cruz",
+    "Mariana Dias",
+    "Maycon",
+    "Lucca"
 ];
 
 const AuthPage = () => {
-    const [view, setView] = useState('login'); // 'login', 'register', 'forgot'
+    const [view, setView] = useState('login'); 
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
