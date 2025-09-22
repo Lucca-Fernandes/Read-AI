@@ -43,26 +43,13 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
+// Lógica de parsing unificada para SEMPRE somar os critérios, garantindo a nota correta.
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
     return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
   
   try {
-    const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
-    const scoreMatch = text.match(finalScoreRegex);
-
-    if (scoreMatch && scoreMatch[1]) {
-      const finalScoreFromLine = parseInt(scoreMatch[1], 10);
-      const cleanText = text.replace(finalScoreRegex, '').trim();
-      const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
-      const summaryMatch = cleanText.match(summaryRegex);
-      const summary = summaryMatch ? summaryMatch[1].trim() : 'Resumo não encontrado.';
-      return { sections: [], summary, finalScore: finalScoreFromLine };
-    }
-
-    console.warn("AVISO: A linha 'FINAL_SCORE:' não foi encontrada. Calculando a partir dos critérios.");
-
     const lines = text.split('\n').filter(line => line.trim() !== '');
     const sections = [];
     let currentSection = null;
@@ -108,6 +95,7 @@ const parseEvaluationText = (text) => {
         return { sections, summary, finalScore };
     }
     
+    // Se não encontrou nenhuma seção de critérios, marca como falha.
     return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
 
   } catch (error) {
@@ -278,8 +266,6 @@ app.post('/api/forgot-password', async (req, res) => {
             },
         });
 
-        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
-        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
@@ -404,10 +390,6 @@ app.post('/api/update', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Erro ao atualizar reuniões.' });
     }
 });
-
-// A Vercel gerencia a porta, então não precisamos mais de app.listen
-// const PORT = process.env.PORT || 3000;
-// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
 
 // Exporta o app para a Vercel
 module.exports = app;
