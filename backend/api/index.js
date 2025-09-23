@@ -41,15 +41,12 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-// Lógica de parsing final: Prioriza a soma precisa dos critérios e usa o FINAL_SCORE como fallback.
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
     return { summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
   
   try {
-    let finalScore = 0;
-    
     const lines = text.split('\n').filter(line => line.trim() !== '');
     const sections = [];
     let currentSection = null;
@@ -61,7 +58,6 @@ const parseEvaluationText = (text) => {
       summary = summaryMatch[1].trim();
     }
 
-    // Tenta somar os critérios primeiro (método mais preciso)
     lines.forEach(line => {
       const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
       const headerMatch = line.match(sectionHeaderRegex);
@@ -74,13 +70,16 @@ const parseEvaluationText = (text) => {
         };
         return;
       }
-      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
+      
+      // 👇 ALTERAÇÃO AQUI: Expressão regular que aceita a pontuação com ou sem negrito (**) 👇
+      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(?:\*\*)?(-?\d+)(?:\*\*)?\s*(?:\((.*?)\))?/;
       const criteriaMatch = line.match(criteriaRegex);
+      
       if (criteriaMatch && currentSection) {
         currentSection.criteria.push({
           text: criteriaMatch[1].trim(),
           maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
-          awardedPoints: parseInt(criteriaMatch[3], 10),
+          awardedPoints: parseInt(criteriaMatch[3], 10), // O grupo de captura do número é agora o 3
           justification: (criteriaMatch[4] || '').trim(),
         });
       }
@@ -89,31 +88,14 @@ const parseEvaluationText = (text) => {
     if (currentSection) sections.push(currentSection);
 
     if (sections.length > 0) {
-        finalScore = sections.reduce((total, section) => {
+        const finalScore = sections.reduce((total, section) => {
           return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
         }, 0);
+        return { summary, finalScore };
     }
     
-    // Se a soma dos critérios falhou (resultou em 0), usamos o total da IA como plano B.
-    if (finalScore === 0 && summary.length > 20) {
-        console.warn(`AVISO: A soma dos critérios resultou em 0. Procurando por 'FINAL_SCORE:' como fallback.`);
-        const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
-        const scoreMatch = text.match(finalScoreRegex);
-
-        if (scoreMatch && scoreMatch[1]) {
-            const finalScoreFromLine = parseInt(scoreMatch[1], 10);
-            if (finalScoreFromLine > 0) {
-                finalScore = finalScoreFromLine;
-            }
-        }
-    }
-
-    // Se, após o fallback, a nota ainda for 0, mas houver análise, marcamos como falha para revisão.
-    if (finalScore === 0 && summary.length > 20) {
-        return { summary, finalScore: -1 };
-    }
-
-    return { summary, finalScore };
+    // Se, mesmo com a regex nova, não encontrar nada, marca como falha.
+    return { summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1 };
 
   } catch (error) {
     console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
@@ -128,7 +110,10 @@ const evaluateMeetingWithGemini = async (meeting) => {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
     }
     try {
-        const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
+        const prompt = `Analise a transcrição da reunião de monitoria... (o restante do seu prompt continua aqui)`; // Mantive o prompt abreviado para clareza
+        
+        // O prompt completo...
+        const fullPrompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
 
 **TAREFA:**
 
@@ -137,7 +122,6 @@ const evaluateMeetingWithGemini = async (meeting) => {
 3.  Liste la pontuação de cada subcritério de forma explícita.
 4.  Some todas as pontuações para calcular o Score Final.
 5.  Apresente um resumo da sua análise.
-6.  No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
 
 **CRITÉRIOS DE AVALIAÇÃO:**
 
@@ -168,8 +152,8 @@ const evaluateMeetingWithGemini = async (meeting) => {
 
 Resumo (Contexto Secundário): ${meeting.summary}
 TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
-        
-        const result = await model.generateContent(prompt);
+
+        const result = await model.generateContent(fullPrompt);
         const responseText = result.response.text().trim();
         const { finalScore } = parseEvaluationText(responseText);
         return { score: finalScore, evaluationText: responseText };
@@ -212,7 +196,7 @@ async function fetchFromSheets() {
     }));
 }
 
-// --- ROTAS DE AUTENTICAÇÃO --- (O restante do arquivo continua igual)
+// --- O restante do arquivo (rotas de autenticação, etc.) continua o mesmo ---
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'monitor' } = req.body;
     if (!name || !email || !password) {

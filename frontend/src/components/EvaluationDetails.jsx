@@ -37,11 +37,9 @@ const StatusIcon = ({ status }) => {
   return icons[status] || <InfoIcon color="disabled" />;
 };
 
-// Esta função agora apenas extrai as seções e o resumo para exibição.
-// O CÁLCULO DA NOTA FOI REMOVIDO DAQUI.
 const parseEvaluationTextForDisplay = (text) => {
   if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação ausente ou inválido.' };
+    return { sections: [], summary: 'Texto de avaliação ausente ou inválido.', finalScore: 0 };
   }
 
   try {
@@ -69,38 +67,51 @@ const parseEvaluationTextForDisplay = (text) => {
         return;
       }
 
-      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
+      // 👇 ALTERAÇÃO AQUI: Expressão regular que aceita a pontuação com ou sem negrito (**) 👇
+      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(?:\*\*)?(-?\d+)(?:\*\*)?\s*(?:\((.*?)\))?/;
       const criteriaMatch = line.match(criteriaRegex);
+
       if (criteriaMatch && currentSection) {
         currentSection.criteria.push({
           text: criteriaMatch[1].trim(),
           maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
-          awardedPoints: parseInt(criteriaMatch[3], 10),
+          awardedPoints: parseInt(criteriaMatch[3], 10), // O grupo de captura do número é agora o 3
           justification: (criteriaMatch[4] || '').trim(),
         });
       }
     });
 
     if (currentSection) sections.push(currentSection);
-    return { sections, summary };
+    
+    // Recalcula a nota final para garantir consistência
+    const finalScore = sections.reduce((total, section) => {
+        return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+    }, 0);
+
+    return { sections, summary, finalScore };
 
   } catch (error) {
     console.error("Falha ao parsear texto para exibição:", error);
-    return { sections: [], summary: 'Erro ao processar o texto da avaliação.' };
+    return { sections: [], summary: 'Erro ao processar o texto da avaliação.', finalScore: 0 };
   }
 };
 
 
 const EvaluationDetails = ({ meeting }) => {
-  // O componente agora recebe o objeto 'meeting' inteiro
-  const { evaluationText, score } = meeting;
+  const { evaluationText, score: scoreFromDb } = meeting;
 
-  const { sections, summary } = useMemo(() => parseEvaluationTextForDisplay(evaluationText), [evaluationText]);
+  // Usamos useMemo para não recalcular a cada renderização
+  const { sections, summary, finalScore } = useMemo(() => parseEvaluationTextForDisplay(evaluationText), [evaluationText]);
+
+  // A nota final exibida é a nota do banco de dados para manter consistência com o card.
+  // A lógica unificada no backend garante que esta nota agora é a correta.
+  const displayScore = scoreFromDb;
 
   const getOverallStatusColor = (score) => {
     if (score >= 80) return 'success';
     if (score >= 50) return 'primary';
     if (score > 0) return 'warning';
+    if (score === 0) return 'default';
     return 'error';
   };
 
@@ -113,21 +124,20 @@ const EvaluationDetails = ({ meeting }) => {
       <Paper elevation={2} sx={{ p: 2, mb: 3, bgcolor: 'background.default' }}>
         <Grid container alignItems="center" justifyContent="center" spacing={2}>
           <Grid item>
-            <ScoreboardIcon sx={{ fontSize: '3rem', color: `${getOverallStatusColor(score)}.main` }}/>
+            <ScoreboardIcon sx={{ fontSize: '3rem', color: `${getOverallStatusColor(displayScore)}.main` }}/>
           </Grid>
           <Grid item>
             <Typography variant="h6" sx={{ color: 'text.secondary', fontWeight: 'medium' }}>
               Nota Final
             </Typography>
-            <Typography variant="h3" component="p" sx={{ fontWeight: 'bold', color: `${getOverallStatusColor(score)}.main`, lineHeight: 1.2 }}>
-              {/* A nota agora vem diretamente do backend, garantindo consistência */}
-              {score}
+            <Typography variant="h3" component="p" sx={{ fontWeight: 'bold', color: `${getOverallStatusColor(displayScore)}.main`, lineHeight: 1.2 }}>
+              {displayScore}
             </Typography>
           </Grid>
         </Grid>
       </Paper>
       
-      {sections.map((section, sectionIndex) => (
+      {sections.length > 0 ? sections.map((section, sectionIndex) => (
         <Accordion key={sectionIndex} defaultExpanded>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Typography sx={{ fontWeight: 'bold' }}>{section.title}</Typography>
@@ -160,7 +170,11 @@ const EvaluationDetails = ({ meeting }) => {
               })}
             </AccordionDetails>
         </Accordion>
-      ))}
+      )) : (
+        <Typography sx={{textAlign: 'center', p: 2, color: 'text.secondary'}}>
+            Não foi possível extrair os detalhes dos critérios desta avaliação.
+        </Typography>
+      )}
 
       <Paper elevation={2} sx={{ p: 2, mt: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
