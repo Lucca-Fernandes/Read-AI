@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import {
     Card,
     CardContent,
@@ -30,111 +30,138 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 import EvaluationDetails from './EvaluationDetails';
 
-// --- LÓGICA DE CÁLCULO DA NOTA ---
-// Esta função analisa o texto da avaliação e calcula a nota com base nos critérios.
-const getCalculatedScore = (evaluationText) => {
-    if (!evaluationText || typeof evaluationText !== 'string') return -1;
-
-    const lines = evaluationText.split('\n');
-    let totalAwarded = 0;
-    let totalMax = 0;
-
-    lines.forEach(line => {
-        // Procura por linhas que contenham o padrão "texto: nota/max"
-        const match = line.match(/-\s(.*?):\s*(-?\d+)\/(\d+)/);
-        if (match) {
-            const awarded = parseInt(match[2], 10);
-            const max = parseInt(match[3], 10);
-            if (!isNaN(awarded) && !isNaN(max) && max > 0) {
-                totalAwarded += awarded;
-                totalMax += max;
-            }
-        }
-    });
-
-    if (totalMax === 0) return -1; // Retorna -1 se nenhum critério pontuável for encontrado
-
-    return Math.round((totalAwarded / totalMax) * 100);
-};
-
-
 const MeetingCard = ({ meeting }) => {
     const [expanded, setExpanded] = useState(false);
     const [modalOpen, setModalOpen] = useState(false);
 
     const getStatusColor = (score) => {
-        if (score === -1) return 'default';
-        if (score >= 80) return 'success';
-        if (score > 50) return 'primary';
-        return 'error';
+        if (score === -1) return 'default'; // Cinza para falha
+        if (score === 0) return 'error'; // Vermelho para não realizada
+        if (score >= 80) return 'success'; // Verde para nota alta
+        if (score > 0 && score <= 50) return 'warning'; // Amarelo para nota baixa
+        return 'primary'; // Azul para notas medianas
     };
 
-    // Usamos useMemo para calcular a nota apenas uma vez, a menos que a avaliação mude.
-    const calculatedScore = useMemo(() => getCalculatedScore(meeting.evaluation_text), [meeting.evaluation_text]);
+    const getScoreLabel = (score) => {
+        if (score === null) return 'Avaliando...';
+        if (score === -1) return 'Falha na Avaliação';
+        if (score === 0) return 'Não Realizada';
+        return `Nota: ${score}`;
+    };
 
-    const handleOpenModal = () => setModalOpen(true);
-    const handleCloseModal = () => setModalOpen(false);
-    const handleExpandClick = () => setExpanded(!expanded);
+    const handleScoreClick = () => {
+        if (meeting && meeting.score !== null) {
+            setModalOpen(true);
+        }
+    };
 
-    const formattedDate = meeting.start_time ? new Date(meeting.start_time).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'Data indisponível';
+    const handleCloseModal = () => {
+        setModalOpen(false);
+    };
 
     return (
-        <Tooltip title={meeting.meeting_title || 'Reunião sem título'} placement="top-start" arrow>
-            <Card sx={{
-                display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%',
-                borderLeft: 5, borderColor: getStatusColor(calculatedScore) + '.main'
-            }}>
-                <CardContent sx={{ pb: 1 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
-                        <Typography variant="h6" component="h3" sx={{ fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical' }}>
-                            {meeting.meeting_title || 'Reunião sem título'}
+        <Tooltip title={`ID da Sessão: ${meeting.session_id}`}>
+            <Card
+                sx={{
+                    mb: 2,
+                    borderLeft: `6px solid`,
+                    borderLeftColor: `${getStatusColor(meeting.score)}.main`,
+                    transition: 'box-shadow 0.3s ease-in-out, transform 0.2s ease-in-out',
+                    '&:hover': {
+                        boxShadow: 6,
+                        transform: 'translateY(-4px)',
+                    },
+                }}
+            >
+                <CardContent>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                        <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 'bold' }}>
+                            {meeting.meeting_title}
                         </Typography>
-                        <Chip
-                            label={`Nota: ${calculatedScore === -1 ? 'N/A' : calculatedScore}`}
-                            color={getStatusColor(calculatedScore)}
-                            size="small"
-                            sx={{ fontWeight: 'bold' }}
-                        />
-                    </Box>
-
-                    <Box sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', gap: 0.5, mb: 0.5 }}>
-                        <PersonIcon fontSize="small" />
-                        <Typography variant="body2">{meeting.owner_name || 'Monitor não identificado'}</Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', gap: 0.5 }}>
-                        <CalendarTodayIcon fontSize="small" />
-                        <Typography variant="body2">{formattedDate}</Typography>
-                    </Box>
-
-                    <Divider sx={{ my: 1.5 }} />
-
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Button onClick={handleOpenModal} variant="outlined" size="small">
-                            Ver Detalhes
-                        </Button>
-                        <Tooltip title={expanded ? "Mostrar menos" : "Mostrar mais"} arrow>
-                            <IconButton onClick={handleExpandClick} size="small">
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Chip
+                                label={getScoreLabel(meeting.score)}
+                                color={getStatusColor(meeting.score)}
+                                icon={meeting.score === -1 ? <ErrorOutlineIcon /> : null}
+                                sx={{ fontWeight: 'bold', cursor: meeting.score !== null ? 'pointer' : 'default' }}
+                                onClick={handleScoreClick}
+                            />
+                            <IconButton onClick={() => setExpanded(!expanded)} sx={{ color: 'secondary.main' }}>
                                 {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                             </IconButton>
-                        </Tooltip>
+                        </Box>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <PersonIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
+                        <Typography><strong>Monitor:</strong> {meeting.owner_name}</Typography>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                        <DescriptionIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
+                        <Typography>
+                            <strong>Resumo:</strong> {meeting.summary}
+                        </Typography>
                     </Box>
 
                     <Collapse in={expanded} timeout="auto" unmountOnExit>
-                        <Box sx={{ mt: 2 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>Informações Adicionais:</Typography>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, color: 'text.secondary' }}>
-                                <GroupIcon fontSize="small" />
-                                <Typography variant="body2">Participantes: {meeting.participants?.length || 0}</Typography>
-                            </Box>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, color: 'text.secondary' }}>
-                                <MicIcon fontSize="small" />
-                                <Typography variant="body2">Tópicos discutidos: {meeting.topics?.length || 0}</Typography>
-                            </Box>
-                            <Typography variant="caption" display="block" sx={{ color: 'text.disabled', mt: 1 }}>
-                                Session ID: {meeting.session_id}
+                        <Divider sx={{ my: 2, borderColor: 'primary.light' }} />
+
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                            <TopicIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
+                            <Typography><strong>Tópicos:</strong> {(meeting.topics || []).join(', ') || 'Nenhum'}</Typography>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                            <SentimentSatisfiedIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
+                            <Typography><strong>Sentimento:</strong> {meeting.sentiments}</Typography>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                            <DescriptionIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
+                            <Typography>
+                                <strong>Capítulos:</strong>{' '}
+                                {(meeting.chapters || []).length > 0
+                                    ? (meeting.chapters || []).map(c => `${c.title}: ${c.description}`).join(' | ')
+                                    : 'Nenhum'}
                             </Typography>
-                            <Typography variant="caption" display="block">
-                                <a href={meeting.report_url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                            <MicIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
+                            <Typography>
+                                <strong>Transcrição:</strong>{' '}
+                                {meeting.transcript ? meeting.transcript.substring(0, 100) + '...' : 'Nenhuma'}
+                            </Typography>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                            <GroupIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
+                            <Typography>
+                                <strong>Participantes:</strong>{' '}
+                                {(meeting.participants || []).length > 0
+                                    ? (meeting.participants || []).map(p => `${p.name} (${p.email})`).join(', ')
+                                    : 'Nenhum'}
+                            </Typography>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                            <CalendarTodayIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
+                            <Typography><strong>Data:</strong> {new Date(meeting.start_time).toLocaleString()}</Typography>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <LinkIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
+                            <Typography>
+                                <strong>Link:</strong>{' '}
+                                <a
+                                    href={meeting.report_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: '#0284c7', textDecoration: 'none' }}
+                                    onMouseEnter={(e) => (e.target.style.textDecoration = 'underline')}
+                                    onMouseLeave={(e) => (e.target.style.textDecoration = 'none')}
+                                >
                                     Ver relatório
                                 </a>
                             </Typography>
@@ -155,7 +182,7 @@ const MeetingCard = ({ meeting }) => {
                     </DialogTitle>
                     
                     <DialogContent dividers sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
-                        <EvaluationDetails evaluationText={meeting.evaluation_text} />
+                        <EvaluationDetails evaluationText={meeting.evaluationText} />
                     </DialogContent>
                     
                     <DialogActions>
