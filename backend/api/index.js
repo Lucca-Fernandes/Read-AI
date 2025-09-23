@@ -12,14 +12,19 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
-// Configuração de CORS para permitir acesso do seu frontend
+
+// 👇 ALTERAÇÃO 1: CONFIGURAÇÃO DE CORS 👇
+// Adicionamos as URLs que podem acessar sua API.
+// A de localhost é para seu ambiente de desenvolvimento.
+// A outra é um placeholder para a URL do seu frontend quando ele estiver no ar.
 const allowedOrigins = [
-    'http://localhost:5173', // Para desenvolvimento local
-    process.env.FRONTEND_URL  // Para o site em produção (Vercel)
+    'http://localhost:5173',
+    process.env.FRONTEND_URL // Vamos criar essa variável de ambiente na Vercel
 ];
 
 app.use(cors({
     origin: function (origin, callback) {
+        // Permite requisições sem 'origin' (como de apps mobile ou Postman) e as da nossa lista.
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -36,7 +41,84 @@ const pool = new Pool({
     }
 });
 
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+
+// --- FUNÇÕES AUXILIARES ---
+
+const parseEvaluationText = (text) => {
+  if (!text || typeof text !== 'string') {
+    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
+  }
+  
+  try {
+    const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
+    const scoreMatch = text.match(finalScoreRegex);
+
+    if (scoreMatch && scoreMatch[1]) {
+      const finalScoreFromLine = parseInt(scoreMatch[1], 10);
+      const cleanText = text.replace(finalScoreRegex, '').trim();
+      const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
+      const summaryMatch = cleanText.match(summaryRegex);
+      const summary = summaryMatch ? summaryMatch[1].trim() : 'Resumo não encontrado.';
+      return { sections: [], summary, finalScore: finalScoreFromLine };
+    }
+
+    console.warn("AVISO: A linha 'FINAL_SCORE:' não foi encontrada. Calculando a partir dos critérios.");
+
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const sections = [];
+    let currentSection = null;
+    let summary = '';
+    
+    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
+    const summaryMatch = text.match(summaryRegex);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim();
+    }
+
+    lines.forEach(line => {
+      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
+      const headerMatch = line.match(sectionHeaderRegex);
+      if (headerMatch) {
+        if (currentSection) sections.push(currentSection);
+        currentSection = {
+          title: headerMatch[1].trim(),
+          maxPoints: parseInt(headerMatch[2], 10),
+          criteria: []
+        };
+        return;
+      }
+      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
+      const criteriaMatch = line.match(criteriaRegex);
+      if (criteriaMatch && currentSection) {
+        currentSection.criteria.push({
+          text: criteriaMatch[1].trim(),
+          maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
+          awardedPoints: parseInt(criteriaMatch[3], 10),
+          justification: (criteriaMatch[4] || '').trim(),
+        });
+        return;
+      }
+    });
+
+    if (currentSection) sections.push(currentSection);
+
+    if (sections.length > 0) {
+        const finalScore = sections.reduce((total, section) => {
+          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+        }, 0);
+        return { sections, summary, finalScore };
+    }
+    
+    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
+
+  } catch (error) {
+    console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
+    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1, rawText: text };
+  }
+};
 
 const evaluateMeetingWithGemini = async (meeting) => {
     try {
@@ -135,234 +217,209 @@ const evaluateMeetingWithGemini = async (meeting) => {
     }
 };
 
-// Autenticação de token (middleware)
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+async function fetchFromSheets() {
+    const API_KEY = process.env.GOOGLE_API_KEY;
+    const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+    const RANGE = 'Página1!A:L';
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${RANGE}?key=${API_KEY}`;
+    
+    const response = await axios.get(url);
+    const rows = response.data.values || [];
+    
+    return rows.slice(1).map((row) => ({
+        session_id: row[0] || 'unknown',
+        meeting_title: row[1] || 'Sem título',
+        start_time: row[2] || null,
+        end_time: row[3] || null,
+        owner_name: row[4] ? row[4].trim() : 'Desconhecido',
+        summary: row[5] || 'Sem resumo',
+        topics: row[6] ? row[6].split(',').filter(t => t && t.toLowerCase() !== 'nenhum' && t.trim() !== '') : [],
+        sentiments: row[7] || 'Unknown',
+        report_url: row[8] || '',
+        chapters: row[9] ? row[9].split(';').filter(c => c).map(c => {
+            const parts = c.split(',').map(s => s.trim());
+            return { title: parts[0] || '', description: parts[1] || '' };
+        }) : [],
+        transcript: row[10] || '',
+        participants: (row[11] || '').split(',').reduce((acc, curr, i, arr) => {
+            if (i % 2 === 0 && arr[i + 1]) {
+                acc.push({ name: curr.trim(), email: arr[i + 1].trim() });
+            }
+            return acc;
+        }, [])
+    }));
+}
 
-    if (token == null) return res.sendStatus(401); // Unauthorized
-
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403); // Forbidden
-        req.user = user;
-        next();
-    });
-};
-
-const isAdmin = (req, res, next) => {
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ error: 'Acesso negado. Rota apenas para administradores.' });
-    }
-    next();
-};
+// --- ROTAS DE AUTENTICAÇÃO ---
 
 app.post('/api/register', async (req, res) => {
-    const { name, email, password } = req.body;
-
+    const { name, email, password, role = 'monitor' } = req.body;
     if (!name || !email || !password) {
-        return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
+        return res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
     }
-
+    if (!email.endsWith('@projetodesenvolve.com.br')) {
+        return res.status(400).json({ error: 'Apenas emails com o domínio @projetodesenvolve.com.br são permitidos.' });
+    }
     try {
-        const userExists = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (userExists.rows.length > 0) {
-            return res.status(400).json({ error: 'Usuário já cadastrado com este e-mail.' });
-        }
-
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-        
-        // O primeiro usuário a se registrar será um admin
-        const usersCount = await pool.query('SELECT COUNT(*) FROM users');
-        const role = usersCount.rows[0].count === '0' ? 'admin' : 'user';
-
+        const password_hash = await bcrypt.hash(password, salt);
         const newUser = await pool.query(
-            'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role',
-            [name, email, hashedPassword, role]
+            "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
+            [name, email, password_hash, role]
         );
-
         res.status(201).json(newUser.rows[0]);
-
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro ao registrar usuário.' });
+        res.status(500).json({ error: 'Email já cadastrado ou erro no servidor.' });
     }
 });
 
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
+    if (!email || !password) {
+        return res.status(400).json({ error: 'Email e senha são obrigatórios.' });
+    }
     try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0) {
-            return res.status(400).json({ error: 'Credenciais inválidas.' });
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (userResult.rows.length === 0) {
+            return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-
-        const user = result.rows[0];
-        const isMatch = await bcrypt.compare(password, user.password);
+        const user = userResult.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch) {
-            return res.status(400).json({ error: 'Credenciais inválidas.' });
+            return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-
-        const token = jwt.sign(
-            { id: user.id, name: user.name, email: user.email, role: user.role },
-            process.env.JWT_SECRET,
-            { expiresIn: '3h' }
-        );
-
-        res.json({ token, user: { name: user.name, email: user.email, role: user.role } });
-
+        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; // Token expira em 8 horas
+        const token = jwt.sign(payload, process.env.JWT_SECRET);
+        res.json({ token, user: payload });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro interno do servidor.' });
+        res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
 
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-    },
-});
+// --- ROTAS DE REDEFINIÇÃO DE SENHA ---
 
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     try {
-        const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
         if (userResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Nenhum usuário encontrado com este e-mail.' });
+            return res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
         }
-        
         const user = userResult.rows[0];
         const token = crypto.randomBytes(32).toString('hex');
         const expires = new Date(Date.now() + 3600000); // 1 hora
-
         await pool.query(
-            'UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE id = $3',
-            [token, expires, user.id]
+            "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
+            [token, expires, email]
         );
+        const transporter = nodemailer.createTransport({
+            service: process.env.EMAIL_SERVICE,
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS,
+            },
+        });
 
-        const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
-            to: user.email,
             from: process.env.EMAIL_USER,
+            to: user.email,
             subject: 'Redefinição de Senha - Painel de Análises',
-            text: `Você está recebendo este e-mail porque você (ou outra pessoa) solicitou a redefinição da senha da sua conta.\n\n` +
-                  `Por favor, clique no link a seguir ou cole-o em seu navegador para concluir o processo:\n\n` +
-                  `${resetUrl}\n\n` +
-                  `Se você não solicitou isso, por favor, ignore este e-mail e sua senha permanecerá inalterada.\n`,
+            text: `Você está recebendo este email porque solicitou a redefinição da sua senha.\n\n` +
+                  `Por favor, clique no link abaixo ou cole no seu navegador para completar o processo:\n\n` +
+                  `${resetLink}\n\n` +
+                  `Se você não solicitou isso, por favor, ignore este email e sua senha permanecerá inalterada.\n`
         };
-
         await transporter.sendMail(mailOptions);
-        res.json({ message: 'Um e-mail de redefinição de senha foi enviado.' });
-
+        res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
     } catch (err) {
-        console.error('Erro no forgot-password:', err);
-        res.status(500).json({ error: 'Erro ao enviar e-mail de redefinição.' });
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
 });
 
 app.post('/api/reset-password/:token', async (req, res) => {
+    const { token } = req.params;
+    const { password } = req.body;
     try {
-        const { token } = req.params;
-        const { password } = req.body;
-
         const userResult = await pool.query(
-            'SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_expires > NOW()',
+            "SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_expires > NOW()",
             [token]
         );
-
         if (userResult.rows.length === 0) {
-            return res.status(400).json({ error: 'O token de redefinição de senha é inválido ou expirou.' });
+            return res.status(400).json({ error: 'Token de redefinição de senha inválido ou expirado.' });
         }
-
         const user = userResult.rows[0];
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
+        const password_hash = await bcrypt.hash(password, salt);
         await pool.query(
-            'UPDATE users SET password = $1, reset_password_token = NULL, reset_password_expires = NULL WHERE id = $2',
-            [hashedPassword, user.id]
+            "UPDATE users SET password_hash = $1, reset_password_token = NULL, reset_password_expires = NULL WHERE id = $2",
+            [password_hash, user.id]
         );
-        
-        res.json({ message: 'Sua senha foi redefinida com sucesso.' });
-
+        res.status(200).json({ message: 'Senha redefinida com sucesso!' });
     } catch (err) {
-        console.error('Erro no reset-password:', err);
+        console.error(err);
         res.status(500).json({ error: 'Erro ao redefinir a senha.' });
     }
 });
 
+// --- MIDDLEWARE DE AUTENTICAÇÃO ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) {
+            console.error('Erro na verificação do token:', err);
+            return res.sendStatus(403); // Forbidden
+        }
+        req.user = user;
+        next();
+    });
+};
+
+// --- ROTAS DA APLICAÇÃO ---
 
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+        const { role, name } = req.user;
         let query = 'SELECT * FROM meetings';
         const queryParams = [];
-
-        if (startDate && endDate) {
-            query += ' WHERE start_time::date BETWEEN $1 AND $2';
-            queryParams.push(startDate, endDate);
+        let whereClauses = [];
+        if (role !== 'admin') {
+            queryParams.push(name);
+            whereClauses.push(`owner_name = $${queryParams.length}`);
         }
-        
+        if (startDate && endDate) {
+            const adjustedEndDate = new Date(endDate);
+            adjustedEndDate.setDate(adjustedEndDate.getDate() + 1);
+            queryParams.push(startDate, adjustedEndDate.toISOString().split('T')[0]);
+            whereClauses.push(`start_time >= $${queryParams.length - 1} AND start_time < $${queryParams.length}`);
+        }
+        if (whereClauses.length > 0) {
+            query += ' WHERE ' + whereClauses.join(' AND ');
+        }
         query += ' ORDER BY start_time DESC';
-
-        const { rows } = await pool.query(query, queryParams);
-        res.json(rows);
+        const result = await pool.query(query, queryParams);
+        res.json(result.rows);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro ao buscar reuniões.' });
+        res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
 
-app.post('/api/refresh-meetings', authenticateToken, isAdmin, async (req, res) => {
+app.post('/api/update', authenticateToken, async (req, res) => {
     try {
-        const firefliesResponse = await axios.get('https://api.fireflies.ai/graphql', {
-            headers: { 'Authorization': `Bearer ${process.env.FIREFLIES_API_KEY}` },
-            data: { query: `{ transcripts { id title date duration transcript_url participants { name } } }` }
-        });
-
-        const transcripts = firefliesResponse.data.data.transcripts;
-
-        if (!transcripts) {
-            return res.status(404).json({ message: "Nenhuma transcrição encontrada na API do Fireflies." });
-        }
-
-        const last30Days = new Date();
-        last30Days.setDate(last30Days.getDate() - 30);
-
-        const recentTranscripts = transcripts.filter(t => new Date(t.date) > last30Days);
-
-        const { rows } = await pool.query('SELECT session_id FROM meetings');
-        const existingIds = rows.map(r => r.session_id);
-
-        const newMeetingsRaw = recentTranscripts.filter(t => !existingIds.includes(t.id));
-
-        const newMeetings = await Promise.all(newMeetingsRaw.map(async (t) => {
-            const transcriptResponse = await axios.get(t.transcript_url);
-            const detailedTranscript = transcriptResponse.data.transcript;
-            const owner = transcriptResponse.data.user;
-
-            return {
-                session_id: t.id,
-                meeting_title: t.title,
-                owner_name: owner?.name || 'Não identificado',
-                summary: 'Resumo a ser gerado',
-                topics: [],
-                sentiments: 'neutro',
-                chapters: [],
-                transcript: detailedTranscript,
-                participants: t.participants,
-                start_time: new Date(t.date).toISOString(),
-                report_url: `https://app.fireflies.ai/view/${t.id}`
-            };
-        }));
-        
+        const sheetsMeetings = await fetchFromSheets();
+        const existingIds = (await pool.query('SELECT session_id FROM meetings')).rows.map(r => r.session_id);
+        const newMeetings = sheetsMeetings.filter(m => !existingIds.includes(m.session_id));
         if (newMeetings.length === 0) {
-            return res.json({ message: 'Nenhuma reunião nova para adicionar.' });
+            return res.json({ message: 'Nenhuma nova reunião encontrada para adicionar.' });
         }
-
         const evaluated = await Promise.all(newMeetings.map(async (m) => {
             const { score, evaluationText } = await evaluateMeetingWithGemini(m);
             return { ...m, score, evaluation_text: evaluationText };
@@ -391,4 +448,8 @@ app.post('/api/refresh-meetings', authenticateToken, isAdmin, async (req, res) =
 });
 
 // A Vercel gerencia a porta, então não precisamos mais de app.listen
+// const PORT = process.env.PORT || 3000;
+// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+
+// Exporta o app para a Vercel
 module.exports = app;
