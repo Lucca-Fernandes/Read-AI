@@ -124,30 +124,20 @@ const evaluateMeetingWithGemini = async (meeting) => {
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
 
-        // --- PROMPT ATUALIZADO ---
-        // A instrução para a "Nota Geral" agora é muito mais específica e imperativa.
+        // --- PROMPT CORRIGIDO PARA GERAR O FORMATO VISUAL DESEJADO ---
         const prompt = `
             Você é um especialista em análise de qualidade de atendimento e monitoria.
             Sua tarefa é avaliar a gravação de uma reunião entre um monitor e um especialista.
             O monitor é: ${meeting.owner_name}.
-            O título da reunião é: "${meeting.meeting_title}".
-            A transcrição completa da conversa está abaixo.
-
-            **Contexto:**
-            O objetivo é avaliar a performance do monitor com base em critérios específicos. A análise deve ser justa, imparcial e construtiva.
-
-            **Transcrição:**
-            ---
-            ${meeting.transcript}
-            ---
+            A transcrição da conversa está abaixo.
 
             **Sua Tarefa:**
 
             1.  **Análise Detalhada por Critérios:**
-                Forneça uma análise detalhada com pontuações para cada um dos seguintes critérios. Seja rigoroso e justifique brevemente as pontuações que não forem máximas.
-                O formato de cada item deve ser: "- Nome do Critério: nota/máximo (justificativa se necessário)".
-                Se um critério for totalmente atendido, pode omitir a justificativa.
-                Se um critério não for aplicável, atribua 0 e justifique.
+                Forneça uma análise detalhada com pontuações para cada um dos seguintes critérios.
+                - O formato de cada seção deve ser: "**Nome da Seção**".
+                - O formato de cada critério deve ser: "- Nome do Critério: nota/máximo (justificativa breve se a nota não for máxima)".
+                - Seja rigoroso e justo.
 
                 **Seção: Abertura e Conexão (Rapport)**
                 - Abertura da reunião e quebra-gelo: 10/10
@@ -164,13 +154,13 @@ const evaluateMeetingWithGemini = async (meeting) => {
                 - Definição de planos de ação e próximos passos: 10/10
 
             2.  **Resumo da Análise:**
-                Após a análise por critérios, escreva um parágrafo conciso com o título "**Resumo da Análise**", fornecendo um feedback geral sobre a performance do monitor, destacando pontos fortes e oportunidades de melhoria.
+                Após os critérios, escreva um parágrafo conciso com o título "**Resumo da Análise**".
 
             3.  **Nota Geral:**
                 Ao final de toda a sua resposta, forneça a nota geral.
-                **IMPORTANTE: A nota geral DEVE ser um número único representando a SOMA EXATA dos pontos atribuídos nos critérios detalhados. Não é uma nota subjetiva, é o resultado do cálculo matemático da soma dos pontos que você atribuiu.**
+                **IMPORTANTE: A nota geral DEVE ser um número único representando a SOMA EXATA dos pontos que você atribuiu nos critérios detalhados.**
 
-            **Formato de Saída Esperado (Exemplo Fictício):**
+            **Formato de Saída Esperado:**
 
             **Abertura e Conexão (Rapport)**
             - Abertura da reunião e quebra-gelo: 8/10 (A abertura foi um pouco direta demais)
@@ -178,16 +168,16 @@ const evaluateMeetingWithGemini = async (meeting) => {
             - Alinhamento de expectativas e objetivos da reunião: 10/10
 
             **Condução e Análise**
-            - Clareza na comunicação e objetividade: 18/20 (Houve um momento de divagação)
+            - Clareza na comunicação e objetividade: 18/20
             - Qualidade e profundidade do feedback fornecido: 20/20
             - Uso de exemplos práticos e dados para embasar a análise: 8/10
 
             **Encerramento e Próximos Passos**
             - Postura construtiva e incentivo ao desenvolvimento: 10/10
-            - Definição de planos de ação e próximos passos: 9/10 (Os próximos passos poderiam ser mais específicos)
+            - Definição de planos de ação e próximos passos: 9/10
 
             **Resumo da Análise**
-            O monitor demonstrou excelente domínio do conteúdo e forneceu feedbacks profundos. A comunicação foi clara na maior parte do tempo. O principal ponto de melhoria é ser mais específico na definição dos planos de ação para garantir a evolução do especialista.
+            O monitor demonstrou excelente domínio do conteúdo...
 
             93
         `;
@@ -197,14 +187,12 @@ const evaluateMeetingWithGemini = async (meeting) => {
         const responseText = await result.response.text();
 
         const lines = responseText.trim().split('\n');
-        // A última linha é sempre a nota, conforme instruído no prompt
         const scoreLine = lines.pop(); 
         const score = parseInt(scoreLine, 10);
-        // O resto do texto é a avaliação detalhada
         const evaluationText = lines.join('\n').trim();
 
         return {
-            score: isNaN(score) ? -1 : score, // Retorna -1 se a nota não for um número
+            score: isNaN(score) ? -1 : score,
             evaluationText: evaluationText || "A avaliação não pôde ser gerada."
         };
 
