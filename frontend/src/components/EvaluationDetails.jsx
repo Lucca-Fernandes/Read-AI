@@ -104,7 +104,6 @@ const EvaluationDetails = ({ meeting }) => {
   const { sections, summary, finalScore } = useMemo(() => parseEvaluationTextForDisplay(evaluationText), [evaluationText]);
 
   // A nota final exibida é a nota do banco de dados para manter consistência com o card.
-  // A lógica unificada no backend garante que esta nota agora é a correta.
   const displayScore = scoreFromDb;
 
   const getOverallStatusColor = (score) => {
