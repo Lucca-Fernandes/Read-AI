@@ -18,8 +18,56 @@ import Filters from '../components/Filters';
 import DashboardChart from '../components/DashboardChart';
 import { useAuth } from '../context/AuthContext';
 
+// FUNÇÃO DE CÁLCULO DE NOTA - A ÚNICA FONTE DA VERDADE
+// Esta função será usada para calcular a nota tanto para o card quanto para o modal.
+const parseEvaluationTextForScore = (text) => {
+  if (!text || typeof text !== 'string') {
+    return 0; // Retorna 0 se não houver texto
+  }
+  
+  try {
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const sections = [];
+    let currentSection = null;
+
+    lines.forEach(line => {
+      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
+      const headerMatch = line.match(sectionHeaderRegex);
+      if (headerMatch) {
+        if (currentSection) sections.push(currentSection);
+        currentSection = { criteria: [] }; // Só precisamos dos critérios para a soma
+        return;
+      }
+      
+      // Regex que aceita a pontuação com ou sem negrito (**)
+      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(?:\*\*)?(-?\d+)(?:\*\*)?\s*(?:\((.*?)\))?/;
+      const criteriaMatch = line.match(criteriaRegex);
+      if (criteriaMatch && currentSection) {
+        currentSection.criteria.push({
+          awardedPoints: parseInt(criteriaMatch[3], 10),
+        });
+      }
+    });
+
+    if (currentSection) sections.push(currentSection);
+
+    if (sections.length > 0) {
+        const finalScore = sections.reduce((total, section) => {
+          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+        }, 0);
+        return finalScore;
+    }
+    
+    return 0; // Retorna 0 se não encontrar critérios
+  } catch (error) {
+    console.error("Falha ao parsear texto no Dashboard:", error);
+    return -1; // Retorna -1 em caso de erro catastrófico
+  }
+};
+
+
 const Dashboard = () => {
-  const { user, logout, token } = useAuth();
+  const { user, logout, token } = useAuth(); 
   const [originalMeetings, setOriginalMeetings] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -33,6 +81,7 @@ const Dashboard = () => {
 
   const fetchMeetings = useCallback(async (start, end) => {
     setLoading(true);
+    setError(null);
     try {
       let url = `${import.meta.env.VITE_API_URL}/api/meetings`;
       
@@ -42,15 +91,21 @@ const Dashboard = () => {
         url += `?startDate=${formattedStart}&endDate=${formattedEnd}`;
       }
       
-      const response = await axios.get(url);
+      const response = await axios.get(url, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       
-      const formattedMeetings = response.data.map(meeting => ({
+      // RECALCULA A NOTA PARA CADA REUNIÃO USANDO A LÓGICA CORRETA
+      const formattedMeetings = response.data.map(meeting => {
+        const correctedScore = parseEvaluationTextForScore(meeting.evaluation_text);
+        return {
           ...meeting,
+          score: correctedScore, // Sobrescreve a nota do backend pela nota recalculada
           evaluationText: meeting.evaluation_text 
-      }));
+        };
+      });
 
       setOriginalMeetings(formattedMeetings);
-      setError(null);
     } catch (err) {
       if (err.response && (err.response.status === 401 || err.response.status === 403)) {
         logout();
@@ -60,13 +115,15 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [logout]);
+  }, [logout, token]);
 
   useEffect(() => {
-    if ((startDate && endDate) || (!startDate && !endDate)) {
-      fetchMeetings(startDate, endDate);
+    if (token) {
+        if ((startDate && endDate) || (!startDate && !endDate)) {
+            fetchMeetings(startDate, endDate);
+        }
     }
-  }, [startDate, endDate, fetchMeetings]);
+  }, [startDate, endDate, fetchMeetings, token]);
 
   const handleSetDateRange = (start, end) => {
     setStartDate(start);
@@ -85,7 +142,7 @@ const Dashboard = () => {
     if (filter === 'not_conducted') {
       processedMeetings = processedMeetings.filter(m => m.score === 0);
     } else {
-      processedMeetings = processedMeetings.filter(m => m.score > 0);
+      processedMeetings = processedMeetings.filter(m => m.score !== 0);
       if (filter === 'score_desc') {
         processedMeetings.sort((a, b) => b.score - a.score);
       } else if (filter === 'score_asc') {
@@ -113,7 +170,7 @@ const Dashboard = () => {
         average: Math.round(monitorStats[name].totalScore / monitorStats[name].count),
         count: monitorStats[name].count,
       }))
-      .filter(monitor => monitor.count >= 2) // O gráfico só aparece se o monitor tiver 2 ou mais reuniões
+      .filter(monitor => monitor.count >= 2) 
       .sort((a, b) => b.average - a.average);
     setChartData(monitorAverages);
   }, [originalMeetings]);
@@ -126,12 +183,12 @@ const Dashboard = () => {
 
   const handleRefresh = async () => {
     setLoading(true);
+    setError(null);
     try {
       await axios.post(`${import.meta.env.VITE_API_URL}/api/update`, {}, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       await fetchMeetings(startDate, endDate); 
-      setError(null);
     } catch (err) {
        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
         logout();
@@ -147,10 +204,10 @@ const Dashboard = () => {
     <Box sx={{ p: { xs: 2, sm: 4 }, maxWidth: 1600, mx: 'auto' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
           <Typography variant="h6">
-              Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
+            Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
           </Typography>
           <Button variant="outlined" color="secondary" onClick={logout}>
-              Sair
+            Sair
           </Button>
       </Box>
 
@@ -224,7 +281,7 @@ const Dashboard = () => {
       ) : (
         <Grid container spacing={3}>
           {meetings.map((meeting) => (
-            <Grid key={meeting.id} xs={12} sm={6} md={4}> {/* Removida prop 'item' para compatibilidade com MUI v5+ */}
+            <Grid item key={meeting.session_id} xs={12} sm={6} md={4}>
               <MeetingCard meeting={meeting} />
             </Grid>
           ))}

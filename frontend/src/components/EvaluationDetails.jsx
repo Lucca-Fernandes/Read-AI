@@ -1,5 +1,3 @@
-// CONTEÚDO COMPLETO DO frontend/src/components/EvaluationDetails.jsx
-
 import React, { useMemo } from 'react';
 import {
   Box,
@@ -66,8 +64,8 @@ const parseEvaluationTextForDisplay = (text) => {
         };
         return;
       }
-
-      // 👇 ALTERAÇÃO AQUI: Expressão regular que aceita a pontuação com ou sem negrito (**) 👇
+      
+      // Regex que aceita a pontuação com ou sem negrito (**)
       const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(?:\*\*)?(-?\d+)(?:\*\*)?\s*(?:\((.*?)\))?/;
       const criteriaMatch = line.match(criteriaRegex);
 
@@ -75,7 +73,7 @@ const parseEvaluationTextForDisplay = (text) => {
         currentSection.criteria.push({
           text: criteriaMatch[1].trim(),
           maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
-          awardedPoints: parseInt(criteriaMatch[3], 10), // O grupo de captura do número é agora o 3
+          awardedPoints: parseInt(criteriaMatch[3], 10),
           justification: (criteriaMatch[4] || '').trim(),
         });
       }
@@ -83,7 +81,6 @@ const parseEvaluationTextForDisplay = (text) => {
 
     if (currentSection) sections.push(currentSection);
     
-    // Recalcula a nota final para garantir consistência
     const finalScore = sections.reduce((total, section) => {
         return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
     }, 0);
@@ -98,13 +95,9 @@ const parseEvaluationTextForDisplay = (text) => {
 
 
 const EvaluationDetails = ({ meeting }) => {
-  const { evaluationText, score: scoreFromDb } = meeting;
+  const { evaluationText } = meeting;
 
-  // Usamos useMemo para não recalcular a cada renderização
   const { sections, summary, finalScore } = useMemo(() => parseEvaluationTextForDisplay(evaluationText), [evaluationText]);
-
-  // A nota final exibida é a nota do banco de dados para manter consistência com o card.
-  const displayScore = scoreFromDb;
 
   const getOverallStatusColor = (score) => {
     if (score >= 80) return 'success';
@@ -123,14 +116,14 @@ const EvaluationDetails = ({ meeting }) => {
       <Paper elevation={2} sx={{ p: 2, mb: 3, bgcolor: 'background.default' }}>
         <Grid container alignItems="center" justifyContent="center" spacing={2}>
           <Grid item>
-            <ScoreboardIcon sx={{ fontSize: '3rem', color: `${getOverallStatusColor(displayScore)}.main` }}/>
+            <ScoreboardIcon sx={{ fontSize: '3rem', color: `${getOverallStatusColor(finalScore)}.main` }}/>
           </Grid>
           <Grid item>
             <Typography variant="h6" sx={{ color: 'text.secondary', fontWeight: 'medium' }}>
               Nota Final
             </Typography>
-            <Typography variant="h3" component="p" sx={{ fontWeight: 'bold', color: `${getOverallStatusColor(displayScore)}.main`, lineHeight: 1.2 }}>
-              {displayScore}
+            <Typography variant="h3" component="p" sx={{ fontWeight: 'bold', color: `${getOverallStatusColor(finalScore)}.main`, lineHeight: 1.2 }}>
+              {finalScore}
             </Typography>
           </Grid>
         </Grid>
