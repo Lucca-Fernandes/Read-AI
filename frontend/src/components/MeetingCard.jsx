@@ -182,7 +182,7 @@ const MeetingCard = ({ meeting }) => {
                     </DialogTitle>
                     
                     <DialogContent dividers sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
-                        <EvaluationDetails meeting={meeting} />
+                        <EvaluationDetails evaluationText={meeting.evaluationText} />
                     </DialogContent>
                     
                     <DialogActions>
