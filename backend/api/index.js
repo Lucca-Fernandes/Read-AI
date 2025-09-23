@@ -42,7 +42,6 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-// 👇 ALTERAÇÃO PRINCIPAL: FUNÇÃO COM LOGS DETALHADOS PARA DEPURAÇÃO 👇
 const parseEvaluationText = (text, sessionId) => {
   const logId = `[Parse LOG | Session: ${sessionId || 'N/A'}]`;
   console.log(`${logId} Iniciando análise do texto recebido da IA.`);
@@ -57,7 +56,7 @@ const parseEvaluationText = (text, sessionId) => {
     const sections = [];
     let currentSection = null;
     let summary = '';
-    let hasMatchedAnyLine = false; // Flag para verificar se alguma linha foi útil
+    let hasMatchedAnyLine = false; 
 
     const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i;
     const summaryMatch = text.match(summaryRegex);
@@ -97,7 +96,6 @@ const parseEvaluationText = (text, sessionId) => {
         return;
       }
 
-      // Se a linha não for um cabeçalho, nem um critério, nem parte do resumo já extraído, registramos como um problema.
       if (!summaryRegex.test(trimmedLine)) {
          console.warn(`${logId} [Linha ${index+1}] AVISO - Linha não reconhecida: "${trimmedLine}"`);
       }
@@ -114,10 +112,9 @@ const parseEvaluationText = (text, sessionId) => {
         return { finalScore };
     }
     
-    // Se não encontrou nenhuma seção ou critério válido, a análise falhou.
     console.error(`${logId} ERRO FATAL - Nenhuma seção ou critério válido foi encontrado no texto. A estrutura da resposta da IA está irreconhecível.`);
     console.error(`${logId} [TEXTO COMPLETO COM PROBLEMA]:\n---\n${text}\n---`);
-    return { finalScore: -2 }; // -2 = Falha na Análise (formato irreconhecível)
+    return { finalScore: -2 }; 
 
   } catch (error) {
     console.error(`${logId} ERRO CATASTRÓFICO durante a análise:`, error);
@@ -176,14 +173,13 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
         
-        // Passamos o ID da sessão para os logs.
         const { finalScore } = parseEvaluationText(responseText, meeting.session_id);
         
         return { score: finalScore, evaluationText: responseText };
 
     } catch (err) {
         console.error(`[Gemini API Error | Session: ${meeting.session_id}] Erro ao avaliar:`, err);
-        return { score: -1, evaluationText: `FALHA DE API: ${err.message}` }; // -1 = Falha de API
+        return { score: -1, evaluationText: `FALHA DE API: ${err.message}` };
     }
 };
 
@@ -220,7 +216,7 @@ async function fetchFromSheets() {
     }));
 }
 
-// --- ROTAS DE AUTENTICAÇÃO ---
+// --- ROTAS DE AUTENTICAÇÃO --- (código omitido por brevidade, continua o mesmo)
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'monitor' } = req.body;
@@ -267,8 +263,6 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
-
-// --- ROTAS DE REDEFINIÇÃO DE SENHA ---
 
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
@@ -335,7 +329,6 @@ app.post('/api/reset-password/:token', async (req, res) => {
         res.status(500).json({ error: 'Erro ao redefinir a senha.' });
     }
 });
-
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -355,7 +348,9 @@ const authenticateToken = (req, res, next) => {
 
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
-        const { startDate, endDate } = req.body;
+        // 👇 CORREÇÃO CRÍTICA DO ERRO 500 👇
+        const { startDate, endDate } = req.query; // Alterado de req.body para req.query
+
         const { role, name } = req.user;
         let query = 'SELECT * FROM meetings';
         const queryParams = [];
@@ -377,7 +372,7 @@ app.get('/api/meetings', authenticateToken, async (req, res) => {
         const result = await pool.query(query, queryParams);
         res.json(result.rows);
     } catch (err) {
-        console.error(err);
+        console.error("Erro na rota /api/meetings:", err);
         res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
@@ -412,7 +407,7 @@ app.post('/api/update', authenticateToken, async (req, res) => {
         }
         res.json({ message: `Adicionadas ${evaluated.length} novas reuniões.` });
     } catch (err) {
-        console.error(err);
+        console.error("Erro na rota /api/update:", err);
         res.status(500).json({ error: 'Erro ao atualizar reuniões.' });
     }
 });
