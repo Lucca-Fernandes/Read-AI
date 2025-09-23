@@ -35,22 +35,25 @@ const MeetingCard = ({ meeting }) => {
     const [modalOpen, setModalOpen] = useState(false);
 
     const getStatusColor = (score) => {
-        if (score === -1) return 'default'; // Cinza para falha
-        if (score === 0) return 'error'; // Vermelho para não realizada
-        if (score >= 80) return 'success'; // Verde para nota alta
+        if (score === -1) return 'default';      // Cinza para Falha de API
+        if (score === -2) return 'default';      // Cinza para Falha na Análise
+        if (score === 0) return 'error';         // Vermelho para Não Realizada
+        if (score >= 80) return 'success';       // Verde para nota alta
         if (score > 0 && score <= 50) return 'warning'; // Amarelo para nota baixa
-        return 'primary'; // Azul para notas medianas
+        return 'primary';                        // Azul para notas medianas
     };
 
     const getScoreLabel = (score) => {
         if (score === null) return 'Avaliando...';
-        if (score === -1) return 'Falha na Avaliação';
+        if (score === -1) return 'Falha na API';
+        if (score === -2) return 'Falha na Análise'; // NOVO STATUS
         if (score === 0) return 'Não Realizada';
         return `Nota: ${score}`;
     };
 
     const handleScoreClick = () => {
-        if (meeting && meeting.score !== null) {
+        // Permite abrir o modal mesmo com falha, para ver o erro.
+        if (meeting && meeting.score !== null && meeting.score !== 0) {
             setModalOpen(true);
         }
     };
@@ -82,8 +85,8 @@ const MeetingCard = ({ meeting }) => {
                             <Chip
                                 label={getScoreLabel(meeting.score)}
                                 color={getStatusColor(meeting.score)}
-                                icon={meeting.score === -1 ? <ErrorOutlineIcon /> : null}
-                                sx={{ fontWeight: 'bold', cursor: meeting.score !== null ? 'pointer' : 'default' }}
+                                icon={meeting.score < 0 ? <ErrorOutlineIcon /> : null}
+                                sx={{ fontWeight: 'bold', cursor: meeting.score !== null && meeting.score !== 0 ? 'pointer' : 'default' }}
                                 onClick={handleScoreClick}
                             />
                             <IconButton onClick={() => setExpanded(!expanded)} sx={{ color: 'secondary.main' }}>
@@ -182,7 +185,8 @@ const MeetingCard = ({ meeting }) => {
                     </DialogTitle>
                     
                     <DialogContent dividers sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
-                        <EvaluationDetails evaluationText={meeting.evaluationText} />
+                        {/* 👇 AQUI ESTÁ A CORREÇÃO FINAL E MAIS IMPORTANTE 👇 */}
+                        <EvaluationDetails evaluationData={meeting.evaluation_details} />
                     </DialogContent>
                     
                     <DialogActions>
