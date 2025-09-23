@@ -30,9 +30,101 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 import EvaluationDetails from './EvaluationDetails';
 
+const parseEvaluationText = (text) => {
+  if (!text || typeof text !== 'string') {
+    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
+  }
+
+  try {
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const sections = [];
+    let currentSection = null;
+    let summary = '';
+
+    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*?)(?=FINAL_SCORE:|$)/;
+    const summaryMatch = text.match(summaryRegex);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim();
+    }
+
+    lines.forEach(line => {
+      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
+      const headerMatch = line.match(sectionHeaderRegex);
+      if (headerMatch) {
+        if (currentSection) sections.push(currentSection);
+        currentSection = { 
+          title: headerMatch[1].trim(), 
+          maxPoints: parseInt(headerMatch[2], 10), 
+          criteria: [] 
+        };
+        return;
+      }
+      
+      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
+      const criteriaMatch = line.match(criteriaRegex);
+      if (criteriaMatch && currentSection) {
+        currentSection.criteria.push({
+          text: criteriaMatch[1].trim(),
+          maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
+          awardedPoints: parseInt(criteriaMatch[3], 10),
+          justification: (criteriaMatch[4] || '').trim(),
+        });
+        return;
+      }
+
+      const reducerRegex = /- (Uso de linguagem informal.*?)\s*\(-(\d+) pontos se sim, 0 se não\):\s*(-?\d+)/;
+      const reducerMatch = line.match(reducerRegex);
+      if (reducerMatch) {
+        const reducerSection = {
+          title: "Redutor de Linguagem",
+          maxPoints: -parseInt(reducerMatch[2], 10),
+          isReducer: true,
+          criteria: [{
+            text: reducerMatch[1].trim(),
+            maxPoints: -parseInt(reducerMatch[2], 10),
+            awardedPoints: parseInt(reducerMatch[3], 10),
+            justification: ""
+          }]
+        };
+        sections.push(reducerSection);
+      }
+    });
+
+    if (currentSection) sections.push(currentSection);
+
+    const finalScore = sections.reduce((total, section) => {
+      return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+    }, 0);
+
+    return { sections, summary, finalScore };
+  } catch (error) {
+    console.error("Falha ao parsear o texto de avaliação:", error);
+    const fallbackScores = {
+      week: text.match(/Perguntou sobre a semana do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      content: text.match(/Perguntou sobre o conteúdo estudado\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      exercises: text.match(/Perguntou sobre os exercícios\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      organization: text.match(/Demonstrou boa condução e organização\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      extraSupport: text.match(/Ofereceu apoio extra\s*\(dicas, recursos\)\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      goalFeedback: text.match(/Feedback sobre a meta\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      languageReducer: text.match(/Uso de linguagem informal ou inadequada\?\s*[:\-]?\s*(-?\d+)/i)?.[1] || 0,
+    };
+    const fallbackFinalScore = Object.values(fallbackScores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
+    return { sections: [], summary: 'Falha ao processar a avaliação. Usando soma calculada como fallback.', finalScore: fallbackFinalScore, rawText: text };
+  }
+};
+
 const MeetingCard = ({ meeting }) => {
     const [expanded, setExpanded] = useState(false);
     const [modalOpen, setModalOpen] = useState(false);
+
+    const { finalScore } = parseEvaluationText(meeting.evaluationText);
 
     const getStatusColor = (score) => {
         if (score === -1) return 'default'; // Cinza para falha
@@ -50,7 +142,7 @@ const MeetingCard = ({ meeting }) => {
     };
 
     const handleScoreClick = () => {
-        if (meeting && meeting.score !== null) {
+        if (meeting && finalScore !== null) {
             setModalOpen(true);
         }
     };
@@ -65,7 +157,7 @@ const MeetingCard = ({ meeting }) => {
                 sx={{
                     mb: 2,
                     borderLeft: `6px solid`,
-                    borderLeftColor: `${getStatusColor(meeting.score)}.main`,
+                    borderLeftColor: `${getStatusColor(finalScore)}.main`,
                     transition: 'box-shadow 0.3s ease-in-out, transform 0.2s ease-in-out',
                     '&:hover': {
                         boxShadow: 6,
@@ -80,10 +172,10 @@ const MeetingCard = ({ meeting }) => {
                         </Typography>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             <Chip
-                                label={getScoreLabel(meeting.score)}
-                                color={getStatusColor(meeting.score)}
-                                icon={meeting.score === -1 ? <ErrorOutlineIcon /> : null}
-                                sx={{ fontWeight: 'bold', cursor: meeting.score !== null ? 'pointer' : 'default' }}
+                                label={getScoreLabel(finalScore)}
+                                color={getStatusColor(finalScore)}
+                                icon={finalScore === -1 ? <ErrorOutlineIcon /> : null}
+                                sx={{ fontWeight: 'bold', cursor: finalScore !== null ? 'pointer' : 'default' }}
                                 onClick={handleScoreClick}
                             />
                             <IconButton onClick={() => setExpanded(!expanded)} sx={{ color: 'secondary.main' }}>
