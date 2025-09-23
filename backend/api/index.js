@@ -13,18 +13,13 @@ const app = express();
 app.use(express.json());
 
 
-// 👇 ALTERAÇÃO 1: CONFIGURAÇÃO DE CORS 👇
-// Adicionamos as URLs que podem acessar sua API.
-// A de localhost é para seu ambiente de desenvolvimento.
-// A outra é um placeholder para a URL do seu frontend quando ele estiver no ar.
 const allowedOrigins = [
     'http://localhost:5173',
-    process.env.FRONTEND_URL // Vamos criar essa variável de ambiente na Vercel
+    process.env.FRONTEND_URL
 ];
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite requisições sem 'origin' (como de apps mobile ou Postman) e as da nossa lista.
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -41,351 +36,305 @@ const pool = new Pool({
     }
 });
 
-
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-// --- FUNÇÕES AUXILIARES ---
-
-const parseEvaluationText = (text) => {
-  if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
-  }
-  
-  try {
-    const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
-    const scoreMatch = text.match(finalScoreRegex);
-
-    if (scoreMatch && scoreMatch[1]) {
-      const finalScoreFromLine = parseInt(scoreMatch[1], 10);
-      const cleanText = text.replace(finalScoreRegex, '').trim();
-      const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
-      const summaryMatch = cleanText.match(summaryRegex);
-      const summary = summaryMatch ? summaryMatch[1].trim() : 'Resumo não encontrado.';
-      return { sections: [], summary, finalScore: finalScoreFromLine };
+// 👇 ALTERAÇÃO 1: NOVA FUNÇÃO PARA CALCULAR A NOTA CORRETAMENTE 👇
+/**
+ * Analisa o texto da avaliação gerado pela IA e soma os pontos de cada critério.
+ * Esta função é a réplica da lógica que existe no frontend (modal).
+ * @param {string} text O texto completo da avaliação.
+ * @returns {number} A soma total dos pontos dos critérios.
+ */
+const calculateScoreFromEvaluation = (text) => {
+    if (!text || typeof text !== 'string') {
+        return 0; // Retorna 0 se o texto for inválido
     }
 
-    console.warn("AVISO: A linha 'FINAL_SCORE:' não foi encontrada. Calculando a partir dos critérios.");
-
-    const lines = text.split('\n').filter(line => line.trim() !== '');
-    const sections = [];
-    let currentSection = null;
-    let summary = '';
+    let totalScore = 0;
+    // Esta expressão regular procura por padrões como "- Critério... (10/10)"
+    // e captura apenas o primeiro número (os pontos ganhos).
+    const criteriaRegex = /- .*?\((\d+)\/\d+\)/g;
     
-    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
-    const summaryMatch = text.match(summaryRegex);
-    if (summaryMatch) {
-      summary = summaryMatch[1].trim();
-    }
-
-    lines.forEach(line => {
-      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
-      const headerMatch = line.match(sectionHeaderRegex);
-      if (headerMatch) {
-        if (currentSection) sections.push(currentSection);
-        currentSection = {
-          title: headerMatch[1].trim(),
-          maxPoints: parseInt(headerMatch[2], 10),
-          criteria: []
-        };
-        return;
-      }
-      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
-      const criteriaMatch = line.match(criteriaRegex);
-      if (criteriaMatch && currentSection) {
-        currentSection.criteria.push({
-          text: criteriaMatch[1].trim(),
-          maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
-          awardedPoints: parseInt(criteriaMatch[3], 10),
-          justification: (criteriaMatch[4] || '').trim(),
-        });
-        return;
-      }
-    });
-
-    if (currentSection) sections.push(currentSection);
-
-    if (sections.length > 0) {
-        const finalScore = sections.reduce((total, section) => {
-          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
-        }, 0);
-        return { sections, summary, finalScore };
+    let match;
+    // Itera sobre todas as correspondências encontradas no texto
+    while ((match = criteriaRegex.exec(text)) !== null) {
+        // match[1] contém o número capturado (os pontos).
+        // Convertemos para inteiro e somamos ao total.
+        totalScore += parseInt(match[1], 10);
     }
     
-    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
-
-  } catch (error) {
-    console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
-    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1, rawText: text };
-  }
+    // Se nenhum critério for encontrado, a nota será 0, o que é mais seguro
+    // do que retornar -1 (indicador de erro).
+    return totalScore;
 };
 
-const evaluateMeetingWithGemini = async (meeting) => {
-    const nonConductedSummary = "No summary available due to limited meeting data.";
-    if ((meeting.summary || '').trim() === nonConductedSummary) {
-        return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
-    }
+
+async function evaluateMeetingWithGemini(meeting) {
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const prompt = `
+        Você é um avaliador de atendimento que analisa transcrições de reuniões entre monitores e clientes.
+        Sua tarefa é avaliar o desempenho do monitor com base na transcrição fornecida.
+        Analise a seguinte transcrição:
+        ---
+        ${meeting.transcript}
+        ---
+        Avalie o desempenho do monitor nos seguintes critérios, atribuindo uma pontuação para cada um.
+        Seja rigoroso e justo. Forneça uma justificativa curta para cada nota.
+        A estrutura da sua resposta DEVE seguir este formato de Markdown:
+
+        **Abertura (Máx: 10)**
+        - Cumpriu o script inicial de boas-vindas? (5/5)
+        - Apresentou-se corretamente? (5/5)
+
+        **Sondagem (Máx: 20)**
+        - Fez perguntas abertas para entender a necessidade do cliente? (10/10)
+        - Demonstrou escuta ativa? (10/10)
+
+        **Solução (Máx: 30)**
+        - Apresentou a solução de forma clara e objetiva? (15/15)
+        - A solução atendia à necessidade do cliente? (15/15)
+
+        **Manejo de Objeções (Máx: 20)**
+        - Conseguiu contornar as objeções do cliente? (10/10)
+        - Manteve a calma e a cordialidade? (10/10)
+
+        **Encerramento (Máx: 20)**
+        - Resumiu o que foi acordado? (10/10)
+        - Seguiu o script de encerramento? (10/10)
+
+        **Redutores**
+        - Usou termos técnicos desnecessários? (-5/0)
+        - Interrompeu o cliente? (-5/0)
+
+        **Resumo da Análise**
+        [Escreva aqui um breve parágrafo resumindo os pontos fortes e fracos do atendimento.]
+    `;
+
     try {
-        const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
-
-**TAREFA:**
-
-1.  Para CADA UM dos subcritérios listados abaixo, atribua uma pontuação.
-2.  A pontuação de cada subcritério deve ser o valor máximo indicado se o critério foi totalmente cumprido, ou 0 se não foi cumprido ou se a informação não está na transcrição.
-3.  Liste la pontuação de cada subcritério de forma explícita.
-4.  Some todas as pontuações para calcular o Score Final.
-5.  Apresente um resumo da sua análise.
-6.  No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
-
-**CRITÉRIOS DE AVALIAÇÃO:**
-
-**1. Progresso do Aluno (Peso Total: 50 pontos)**
-   - Perguntou sobre a semana do aluno? (5 pontos):
-   - Verificou a conclusão da meta anterior? (10 pontos):
-   - Estipou uma nova meta para o aluno? (10 pontos):
-   - Perguntou sobre o conteúdo estudado? (20 pontos):
-   - Perguntou sobre os exercícios? (5 pontos):
-
-**2. Qualidade do Atendimento (Peso Total: 15 pontos)**
-   - Esclareceu todas as dúvidas corretamente? (10 pontos):
-   - Demonstrou boa condução e organização? (5 pontos):
-
-**3. Engajamento e Motivação (Peso Total: 15 pontos)**
-   - Incentivou o aluno a se manter no curso? (5 pontos):
-   - Reforçou a importância das metas e encontros? (5 pontos):
-   - Ofereceu apoio extra (dicas, recursos)? (5 pontos):
-
-**4. Registro de Sinais de Risco (Peso Total: 10 pontos)**
-   - Conduziu corretamente casos de desmotivação ou risco? (10 pontos):
-
-**5. Feedback ao Aluno (Peso Total: 10 pontos)**
-   - Reconheceu conquistas e avanços do aluno? (5 pontos):
-   - Feedback sobre a meta (5 pontos): A regra para este critério é: Se a meta anterior do aluno foi atingida, a nota é 5. Se a meta anterior NÃO foi atingida, a nota só será 5 se o monitor ofereceu um feedback construtivo sobre isso. Caso contrário, a nota é 0.
-
---- DADOS DA REUNIÃO ---
-
-Resumo (Contexto Secundário): ${meeting.summary}
-TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
-        
         const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim();
-        const { finalScore } = parseEvaluationText(responseText);
-        return { score: finalScore, evaluationText: responseText };
-    } catch (err) {
-        console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
-        return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
-    }
-};
+        const response = await result.response;
+        const evaluationText = response.text();
 
-async function fetchFromSheets() {
-    const API_KEY = process.env.GOOGLE_API_KEY;
-    const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-    const RANGE = 'Página1!A:L';
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${RANGE}?key=${API_KEY}`;
-    
-    const response = await axios.get(url);
-    const rows = response.data.values || [];
-    
-    return rows.slice(1).map((row) => ({
-        session_id: row[0] || 'unknown',
-        meeting_title: row[1] || 'Sem título',
-        start_time: row[2] || null,
-        end_time: row[3] || null,
-        owner_name: row[4] ? row[4].trim() : 'Desconhecido',
-        summary: row[5] || 'Sem resumo',
-        topics: row[6] ? row[6].split(',').filter(t => t && t.toLowerCase() !== 'nenhum' && t.trim() !== '') : [],
-        sentiments: row[7] || 'Unknown',
-        report_url: row[8] || '',
-        chapters: row[9] ? row[9].split(';').filter(c => c).map(c => {
-            const parts = c.split(',').map(s => s.trim());
-            return { title: parts[0] || '', description: parts[1] || '' };
-        }) : [],
-        transcript: row[10] || '',
-        participants: (row[11] || '').split(',').reduce((acc, curr, i, arr) => {
-            if (i % 2 === 0 && arr[i + 1]) {
-                acc.push({ name: curr.trim(), email: arr[i + 1].trim() });
-            }
-            return acc;
-        }, [])
-    }));
+        // 👇 ALTERAÇÃO 2: USANDO A NOVA FUNÇÃO DE CÁLCULO 👇
+        // Removemos a busca pela "Nota Final" no texto e agora calculamos a nota
+        // somando os pontos dos critérios, garantindo consistência.
+        const score = calculateScoreFromEvaluation(evaluationText);
+
+        return { score, evaluationText };
+
+    } catch (error) {
+        console.error("Erro ao chamar a API Gemini:", error);
+        // Em caso de erro com a IA, retornamos um texto de falha e uma nota -1.
+        return {
+            score: -1,
+            evaluationText: "Falha ao processar avaliação com a IA."
+        };
+    }
 }
 
-// --- ROTAS DE AUTENTICAÇÃO ---
-
-app.post('/api/register', async (req, res) => {
-    const { name, email, password, role = 'monitor' } = req.body;
-    if (!name || !email || !password) {
-        return res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
-    }
-    if (!email.endsWith('@projetodesenvolve.com.br')) {
-        return res.status(400).json({ error: 'Apenas emails com o domínio @projetodesenvolve.com.br são permitidos.' });
-    }
-    try {
-        const salt = await bcrypt.genSalt(10);
-        const password_hash = await bcrypt.hash(password, salt);
-        const newUser = await pool.query(
-            "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
-            [name, email, password_hash, role]
-        );
-        res.status(201).json(newUser.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Email já cadastrado ou erro no servidor.' });
-    }
-});
-
+// Rota de autenticação de login
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
-    if (!email || !password) {
-        return res.status(400).json({ error: 'Email e senha são obrigatórios.' });
-    }
     try {
-        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-        if (userResult.rows.length === 0) {
-            return res.status(401).json({ error: 'Credenciais inválidas.' });
+        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
+            const isMatch = await bcrypt.compare(password, user.password_hash);
+            if (isMatch) {
+                const token = jwt.sign({ userId: user.id, name: user.name, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+                res.json({ token, user: { name: user.name, email: user.email } });
+            } else {
+                res.status(401).json({ error: 'Credenciais inválidas.' });
+            }
+        } else {
+            res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-        const user = userResult.rows[0];
-        const isMatch = await bcrypt.compare(password, user.password_hash);
-        if (!isMatch) {
-            return res.status(401).json({ error: 'Credenciais inválidas.' });
-        }
-        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; // Token expira em 8 horas
-        const token = jwt.sign(payload, process.env.JWT_SECRET);
-        res.json({ token, user: payload });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro interno do servidor' });
+        res.status(500).json({ error: 'Erro interno do servidor.' });
     }
 });
 
-// --- ROTAS DE REDEFINIÇÃO DE SENHA ---
+// Rota para criação de usuário
+app.post('/api/register', async (req, res) => {
+    const { name, email, password } = req.body;
+    try {
+        const salt = await bcrypt.genSalt(10);
+        const passwordHash = await bcrypt.hash(password, salt);
+        await pool.query(
+            'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3)',
+            [name, email, passwordHash]
+        );
+        res.status(201).json({ message: 'Usuário criado com sucesso!' });
+    } catch (err) {
+        if (err.code === '23505') { // Código de violação de unicidade do PostgreSQL
+            return res.status(400).json({ error: 'O e-mail informado já está em uso.' });
+        }
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao criar usuário.' });
+    }
+});
 
+// Rota para solicitar reset de senha
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     try {
-        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         if (userResult.rows.length === 0) {
-            return res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
+            return res.status(404).json({ error: 'Usuário não encontrado.' });
         }
+        
         const user = userResult.rows[0];
         const token = crypto.randomBytes(32).toString('hex');
         const expires = new Date(Date.now() + 3600000); // 1 hora
-        await pool.query(
-            "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
-            [token, expires, email]
-        );
-        const transporter = nodemailer.createTransport({
-            service: process.env.EMAIL_SERVICE,
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS,
-            },
-        });
 
-        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
-        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
+        await pool.query(
+            'UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE id = $3',
+            [token, expires, user.id]
+        );
+        
+        const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST,
+            port: process.env.SMTP_PORT,
+            auth: {
+              user: process.env.SMTP_USER,
+              pass: process.env.SMTP_PASS
+            }
+        });
+        
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
-        const mailOptions = {
-            from: process.env.EMAIL_USER,
+        await transporter.sendMail({
+            from: process.env.EMAIL_FROM,
             to: user.email,
-            subject: 'Redefinição de Senha - Painel de Análises',
-            text: `Você está recebendo este email porque solicitou a redefinição da sua senha.\n\n` +
-                  `Por favor, clique no link abaixo ou cole no seu navegador para completar o processo:\n\n` +
-                  `${resetLink}\n\n` +
-                  `Se você não solicitou isso, por favor, ignore este email e sua senha permanecerá inalterada.\n`
-        };
-        await transporter.sendMail(mailOptions);
-        res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
+            subject: 'Recuperação de Senha - Painel de Análises',
+            html: `<p>Você solicitou a recuperação de senha. Clique neste <a href="${resetLink}">link</a> para redefinir sua senha. O link expira em 1 hora.</p>`
+        });
+
+        res.json({ message: 'E-mail de recuperação enviado com sucesso!' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
 });
 
+// Rota para efetivar o reset de senha
 app.post('/api/reset-password/:token', async (req, res) => {
     const { token } = req.params;
     const { password } = req.body;
     try {
         const userResult = await pool.query(
-            "SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_expires > NOW()",
+            'SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_expires > NOW()',
             [token]
         );
+
         if (userResult.rows.length === 0) {
-            return res.status(400).json({ error: 'Token de redefinição de senha inválido ou expirado.' });
+            return res.status(400).json({ error: 'Token inválido ou expirado.' });
         }
+
         const user = userResult.rows[0];
         const salt = await bcrypt.genSalt(10);
-        const password_hash = await bcrypt.hash(password, salt);
+        const passwordHash = await bcrypt.hash(password, salt);
+
         await pool.query(
-            "UPDATE users SET password_hash = $1, reset_password_token = NULL, reset_password_expires = NULL WHERE id = $2",
-            [password_hash, user.id]
+            'UPDATE users SET password_hash = $1, reset_password_token = NULL, reset_password_expires = NULL WHERE id = $2',
+            [passwordHash, user.id]
         );
-        res.status(200).json({ message: 'Senha redefinida com sucesso!' });
+
+        res.json({ message: 'Senha redefinida com sucesso!' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao redefinir a senha.' });
     }
 });
 
-// --- MIDDLEWARE DE AUTENTICAÇÃO ---
+
+// Middleware para proteger rotas
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (token == null) return res.sendStatus(401);
+
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) {
-            console.error('Erro na verificação do token:', err);
-            return res.sendStatus(403); // Forbidden
-        }
+        if (err) return res.sendStatus(403);
         req.user = user;
         next();
     });
 };
 
-// --- ROTAS DA APLICAÇÃO ---
-
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
-        const { role, name } = req.user;
-        let query = 'SELECT * FROM meetings';
-        const queryParams = [];
-        let whereClauses = [];
-        if (role !== 'admin') {
-            queryParams.push(name);
-            whereClauses.push(`owner_name = $${queryParams.length}`);
-        }
-        if (startDate && endDate) {
-            const adjustedEndDate = new Date(endDate);
-            adjustedEndDate.setDate(adjustedEndDate.getDate() + 1);
-            queryParams.push(startDate, adjustedEndDate.toISOString().split('T')[0]);
-            whereClauses.push(`start_time >= $${queryParams.length - 1} AND start_time < $${queryParams.length}`);
-        }
-        if (whereClauses.length > 0) {
-            query += ' WHERE ' + whereClauses.join(' AND ');
-        }
-        query += ' ORDER BY start_time DESC';
-        const result = await pool.query(query, queryParams);
+        const result = await pool.query('SELECT * FROM meetings ORDER BY start_time DESC');
         res.json(result.rows);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro interno do servidor' });
+        res.status(500).json({ error: 'Erro ao buscar reuniões.' });
     }
 });
 
-app.post('/api/update', authenticateToken, async (req, res) => {
+app.get('/api/refresh-meetings', authenticateToken, async (req, res) => {
     try {
-        const sheetsMeetings = await fetchFromSheets();
-        const existingIds = (await pool.query('SELECT session_id FROM meetings')).rows.map(r => r.session_id);
-        const newMeetings = sheetsMeetings.filter(m => !existingIds.includes(m.session_id));
+        const response = await axios.get('https://api.zoom.us/v2/users/me/recordings', {
+            headers: { 'Authorization': `Bearer ${process.env.ZOOM_JWT}` },
+            params: {
+                from: '2024-01-01',
+                page_size: 50
+            }
+        });
+
+        const allMeetings = response.data.meetings;
+        const dbResult = await pool.query('SELECT session_id FROM meetings');
+        const existingIds = dbResult.rows.map(r => r.session_id);
+
+        const newMeetings = allMeetings
+            .filter(m => !existingIds.includes(m.uuid))
+            .map(m => ({
+                session_id: m.uuid,
+                meeting_title: m.topic,
+                owner_name: m.host_email.split('@')[0].replace('.', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                summary: '', 
+                topics: [],
+                sentiments: '',
+                chapters: [],
+                transcript: '', 
+                participants: [],
+                start_time: m.start_time,
+                report_url: m.share_url,
+                score: 0,
+                evaluation_text: ''
+            }));
+        
         if (newMeetings.length === 0) {
-            return res.json({ message: 'Nenhuma nova reunião encontrada para adicionar.' });
+            return res.json({ message: 'Nenhuma nova reunião para adicionar.' });
         }
-        const evaluated = await Promise.all(newMeetings.map(async (m) => {
+
+        for(let meeting of newMeetings) {
+            try {
+                const detailsResponse = await axios.get(`https://api.zoom.us/v2/meetings/${meeting.session_id}/recordings`, {
+                    headers: { 'Authorization': `Bearer ${process.env.ZOOM_JWT}` }
+                });
+                
+                const audioFile = detailsResponse.data.recording_files.find(f => f.file_type === 'M4A' || f.recording_type === 'audio_only');
+                if (audioFile) {
+                    const transcriptResponse = await axios.get(audioFile.play_url.replace('https://us02web.zoom.us/rec/play/', 'https://ssrweb.zoom.us/v2/rec/play/'), {
+                        headers: { 'Authorization': `Bearer ${process.env.ZOOM_JWT}` }
+                    });
+                    
+                    if(transcriptResponse.data.transcripts) {
+                       meeting.transcript = transcriptResponse.data.transcripts.map(t => t.text).join(' ');
+                    }
+                }
+            } catch (err) {
+                console.error(`Erro ao buscar detalhes para a reunião ${meeting.session_id}:`, err.response ? err.response.data : err.message);
+            }
+        }
+
+        const meetingsToEvaluate = newMeetings.filter(m => m.transcript);
+        const evaluated = await Promise.all(meetingsToEvaluate.map(async (m) => {
             const { score, evaluationText } = await evaluateMeetingWithGemini(m);
             return { ...m, score, evaluation_text: evaluationText };
         }));
+
         for (const m of evaluated) {
             await pool.query(`
                 INSERT INTO meetings (
@@ -409,9 +358,4 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
-// A Vercel gerencia a porta, então não precisamos mais de app.listen
-// const PORT = process.env.PORT || 3000;
-// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-
-// Exporta o app para a Vercel
 module.exports = app;
