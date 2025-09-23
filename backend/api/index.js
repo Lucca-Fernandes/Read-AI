@@ -121,87 +121,59 @@ const parseEvaluationText = (text) => {
 };
 
 const evaluateMeetingWithGemini = async (meeting) => {
+    const nonConductedSummary = "No summary available due to limited meeting data.";
+    if ((meeting.summary || '').trim() === nonConductedSummary) {
+        return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
+    }
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+        const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
 
-        // --- PROMPT CORRIGIDO PARA GERAR O FORMATO VISUAL DESEJADO ---
-        const prompt = `
-            Você é um especialista em análise de qualidade de atendimento e monitoria.
-            Sua tarefa é avaliar a gravação de uma reunião entre um monitor e um especialista.
-            O monitor é: ${meeting.owner_name}.
-            A transcrição da conversa está abaixo.
+**TAREFA:**
 
-            **Sua Tarefa:**
+1.  Para CADA UM dos subcritérios listados abaixo, atribua uma pontuação.
+2.  A pontuação de cada subcritério deve ser o valor máximo indicado se o critério foi totalmente cumprido, ou 0 se não foi cumprido ou se a informação não está na transcrição.
+3.  Liste la pontuação de cada subcritério de forma explícita.
+4.  Some todas as pontuações para calcular o Score Final.
+5.  Apresente um resumo da sua análise.
+6.  No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
 
-            1.  **Análise Detalhada por Critérios:**
-                Forneça uma análise detalhada com pontuações para cada um dos seguintes critérios.
-                - O formato de cada seção deve ser: "**Nome da Seção**".
-                - O formato de cada critério deve ser: "- Nome do Critério: nota/máximo (justificativa breve se a nota não for máxima)".
-                - Seja rigoroso e justo.
+**CRITÉRIOS DE AVALIAÇÃO:**
 
-                **Seção: Abertura e Conexão (Rapport)**
-                - Abertura da reunião e quebra-gelo: 10/10
-                - Demonstração de empatia e escuta ativa: 10/10
-                - Alinhamento de expectativas e objetivos da reunião: 10/10
+**1. Progresso do Aluno (Peso Total: 50 pontos)**
+   - Perguntou sobre a semana do aluno? (5 pontos):
+   - Verificou a conclusão da meta anterior? (10 pontos):
+   - Estipou uma nova meta para o aluno? (10 pontos):
+   - Perguntou sobre o conteúdo estudado? (20 pontos):
+   - Perguntou sobre os exercícios? (5 pontos):
 
-                **Seção: Condução e Análise**
-                - Clareza na comunicação e objetividade: 20/20
-                - Qualidade e profundidade do feedback fornecido: 20/20
-                - Uso de exemplos práticos e dados para embasar a análise: 10/10
+**2. Qualidade do Atendimento (Peso Total: 15 pontos)**
+   - Esclareceu todas as dúvidas corretamente? (10 pontos):
+   - Demonstrou boa condução e organização? (5 pontos):
 
-                **Seção: Encerramento e Próximos Passos**
-                - Postura construtiva e incentivo ao desenvolvimento: 10/10
-                - Definição de planos de ação e próximos passos: 10/10
+**3. Engajamento e Motivação (Peso Total: 15 pontos)**
+   - Incentivou o aluno a se manter no curso? (5 pontos):
+   - Reforçou a importância das metas e encontros? (5 pontos):
+   - Ofereceu apoio extra (dicas, recursos)? (5 pontos):
 
-            2.  **Resumo da Análise:**
-                Após os critérios, escreva um parágrafo conciso com o título "**Resumo da Análise**".
+**4. Registro de Sinais de Risco (Peso Total: 10 pontos)**
+   - Conduziu corretamente casos de desmotivação ou risco? (10 pontos):
 
-            3.  **Nota Geral:**
-                Ao final de toda a sua resposta, forneça a nota geral.
-                **IMPORTANTE: A nota geral DEVE ser um número único representando a SOMA EXATA dos pontos que você atribuiu nos critérios detalhados.**
+**5. Feedback ao Aluno (Peso Total: 10 pontos)**
+   - Reconheceu conquistas e avanços do aluno? (5 pontos):
+   - Feedback sobre a meta (5 pontos): A regra para este critério é: Se a meta anterior do aluno foi atingida, a nota é 5. Se a meta anterior NÃO foi atingida, a nota só será 5 se o monitor ofereceu um feedback construtivo sobre isso. Caso contrário, a nota é 0.
 
-            **Formato de Saída Esperado:**
+--- DADOS DA REUNIÃO ---
 
-            **Abertura e Conexão (Rapport)**
-            - Abertura da reunião e quebra-gelo: 8/10 (A abertura foi um pouco direta demais)
-            - Demonstração de empatia e escuta ativa: 10/10
-            - Alinhamento de expectativas e objetivos da reunião: 10/10
-
-            **Condução e Análise**
-            - Clareza na comunicação e objetividade: 18/20
-            - Qualidade e profundidade do feedback fornecido: 20/20
-            - Uso de exemplos práticos e dados para embasar a análise: 8/10
-
-            **Encerramento e Próximos Passos**
-            - Postura construtiva e incentivo ao desenvolvimento: 10/10
-            - Definição de planos de ação e próximos passos: 9/10
-
-            **Resumo da Análise**
-            O monitor demonstrou excelente domínio do conteúdo...
-
-            93
-        `;
-
-
+Resumo (Contexto Secundário): ${meeting.summary}
+TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
+        
         const result = await model.generateContent(prompt);
-        const responseText = await result.response.text();
-
-        const lines = responseText.trim().split('\n');
-        const scoreLine = lines.pop(); 
-        const score = parseInt(scoreLine, 10);
-        const evaluationText = lines.join('\n').trim();
-
-        return {
-            score: isNaN(score) ? -1 : score,
-            evaluationText: evaluationText || "A avaliação não pôde ser gerada."
-        };
-
-    } catch (error) {
-        console.error("Erro ao avaliar com Gemini:", error);
-        return {
-            score: -1,
-            evaluationText: `Falha ao processar a avaliação. Motivo: ${error.message}`
-        };
+        const responseText = result.response.text().trim();
+        const { finalScore } = parseEvaluationText(responseText);
+        return { score: finalScore, evaluationText: responseText };
+    } catch (err) {
+        console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
+        return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
     }
 };
 
@@ -310,6 +282,8 @@ app.post('/api/forgot-password', async (req, res) => {
             },
         });
 
+        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
+        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
