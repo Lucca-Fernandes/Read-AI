@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Grid,
   Typography,
@@ -18,6 +18,32 @@ import Filters from '../components/Filters';
 import DashboardChart from '../components/DashboardChart';
 import { useAuth } from '../context/AuthContext';
 
+// --- LÓGICA DE CÁLCULO DA NOTA (MESMA FUNÇÃO DO MeetingCard) ---
+const getCalculatedScore = (evaluationText) => {
+    if (!evaluationText || typeof evaluationText !== 'string') return -1;
+    
+    const lines = evaluationText.split('\n');
+    let totalAwarded = 0;
+    let totalMax = 0;
+
+    lines.forEach(line => {
+        const match = line.match(/-\s(.*?):\s*(-?\d+)\/(\d+)/);
+        if (match) {
+            const awarded = parseInt(match[2], 10);
+            const max = parseInt(match[3], 10);
+            if (!isNaN(awarded) && !isNaN(max) && max > 0) {
+                totalAwarded += awarded;
+                totalMax += max;
+            }
+        }
+    });
+
+    if (totalMax === 0) return -1;
+
+    return Math.round((totalAwarded / totalMax) * 100);
+};
+
+
 const Dashboard = () => {
   const { user, logout, token } = useAuth();
   const [originalMeetings, setOriginalMeetings] = useState([]);
@@ -36,163 +62,120 @@ const Dashboard = () => {
     try {
       let url = `${import.meta.env.VITE_API_URL}/api/meetings`;
       
-      if (start && end) {
-        const formattedStart = format(start, 'yyyy-MM-dd');
-        const formattedEnd = format(end, 'yyyy-MM-dd');
-        url += `?startDate=${formattedStart}&endDate=${formattedEnd}`;
-      }
+      const params = {};
+      if (start) params.startDate = format(start, 'yyyy-MM-dd');
+      if (end) params.endDate = format(end, 'yyyy-MM-dd');
       
-      const response = await axios.get(url);
-      
-      const formattedMeetings = response.data.map(meeting => ({
-          ...meeting,
-          evaluationText: meeting.evaluation_text 
-      }));
+      const response = await axios.get(url, { 
+        headers: { 'Authorization': `Bearer ${token}` },
+        params 
+      });
 
-      setOriginalMeetings(formattedMeetings);
-      setError(null);
+      setOriginalMeetings(response.data);
+      setMeetings(response.data);
     } catch (err) {
-      if (err.response && (err.response.status === 401 || err.response.status === 403)) {
-        logout();
+      console.error("Erro ao buscar reuniões:", err);
+      if (err.response?.status === 403) {
+        setError('Sua sessão expirou. Por favor, faça o login novamente.');
+        setTimeout(logout, 3000);
       } else {
-        setError(`Falha ao carregar reuniões: ${err.message}`);
+        setError('Falha ao carregar as reuniões. Tente atualizar a página.');
       }
     } finally {
       setLoading(false);
     }
-  }, [logout]);
+  }, [token, logout]);
 
   useEffect(() => {
-    if ((startDate && endDate) || (!startDate && !endDate)) {
-      fetchMeetings(startDate, endDate);
+    fetchMeetings(startDate, endDate);
+  }, [fetchMeetings, startDate, endDate]);
+
+  const applyFiltersAndCalculateChartData = useCallback(() => {
+    let filtered = [...originalMeetings];
+
+    // Lógica de ordenação e filtro
+    if (filter !== 'all') {
+      filtered.sort((a, b) => {
+        const scoreA = getCalculatedScore(a.evaluation_text);
+        const scoreB = getCalculatedScore(b.evaluation_text);
+        return filter === 'highest' ? scoreB - scoreA : scoreA - scoreB;
+      });
     }
-  }, [startDate, endDate, fetchMeetings]);
 
-  const handleSetDateRange = (start, end) => {
-    setStartDate(start);
-    setEndDate(end);
-  };
-
-  useEffect(() => {
-    let processedMeetings = [...originalMeetings];
-    if (keyword.trim() !== '') {
-      const lowerCaseKeyword = keyword.toLowerCase();
-      processedMeetings = processedMeetings.filter(meeting =>
-        (meeting.meeting_title || '').toLowerCase().includes(lowerCaseKeyword) ||
-        (meeting.owner_name || '').toLowerCase().includes(lowerCaseKeyword)
+    if (keyword) {
+      const lowerKeyword = keyword.toLowerCase();
+      filtered = filtered.filter(m =>
+        m.meeting_title?.toLowerCase().includes(lowerKeyword) ||
+        m.owner_name?.toLowerCase().includes(lowerKeyword) ||
+        m.summary?.toLowerCase().includes(lowerKeyword)
       );
     }
-    if (filter === 'not_conducted') {
-      processedMeetings = processedMeetings.filter(m => m.score === 0);
-    } else {
-      processedMeetings = processedMeetings.filter(m => m.score > 0);
-      if (filter === 'score_desc') {
-        processedMeetings.sort((a, b) => b.score - a.score);
-      } else if (filter === 'score_asc') {
-        processedMeetings.sort((a, b) => a.score - b.score);
-      }
-    }
-    setMeetings(processedMeetings);
-  }, [filter, keyword, originalMeetings]);
+
+    setMeetings(filtered);
+
+    // Lógica para calcular os dados do gráfico
+    const calculateChartData = (meetingsToProcess) => {
+      const scoresByMonitor = meetingsToProcess.reduce((acc, meeting) => {
+        const score = getCalculatedScore(meeting.evaluation_text);
+        if (meeting.owner_name && score !== -1) {
+          if (!acc[meeting.owner_name]) {
+            acc[meeting.owner_name] = { totalScore: 0, count: 0 };
+          }
+          acc[meeting.owner_name].totalScore += score;
+          acc[meeting.owner_name].count++;
+        }
+        return acc;
+      }, {});
+
+      const data = Object.entries(scoresByMonitor)
+        .filter(([, data]) => data.count >= 2)
+        .map(([monitor, data]) => ({
+          monitor,
+          average: Math.round(data.totalScore / data.count),
+        }))
+        .sort((a, b) => b.average - a.average);
+
+      setChartData(data);
+    };
+
+    calculateChartData(originalMeetings);
+  }, [originalMeetings, filter, keyword]);
 
   useEffect(() => {
-    if (originalMeetings.length === 0) return;
-    const validMeetings = originalMeetings.filter(m => m.score > 0);
-    const monitorStats = validMeetings.reduce((acc, meeting) => {
-      const monitorName = meeting.owner_name;
-      if (!acc[monitorName]) {
-        acc[monitorName] = { totalScore: 0, count: 0 };
-      }
-      acc[monitorName].totalScore += meeting.score;
-      acc[monitorName].count++;
-      return acc;
-    }, {});
-    const monitorAverages = Object.keys(monitorStats)
-      .map(name => ({
-        monitor: name,
-        average: Math.round(monitorStats[name].totalScore / monitorStats[name].count),
-        count: monitorStats[name].count,
-      }))
-      .filter(monitor => monitor.count >= 2) // O gráfico só aparece se o monitor tiver 2 ou mais reuniões
-      .sort((a, b) => b.average - a.average);
-    setChartData(monitorAverages);
-  }, [originalMeetings]);
-
-  const handleTitleClick = () => {
-    setFilter('all');
-    setKeyword('');
-    handleSetDateRange(null, null);
-  };
+    applyFiltersAndCalculateChartData();
+  }, [applyFiltersAndCalculateChartData]);
 
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      await axios.post(`${import.meta.env.VITE_API_URL}/api/update`, {}, {
+      await axios.post(`${import.meta.env.VITE_API_URL}/api/refresh-meetings`, {}, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      await fetchMeetings(startDate, endDate); 
-      setError(null);
+      await fetchMeetings(startDate, endDate);
     } catch (err) {
-       if (err.response && (err.response.status === 401 || err.response.status === 403)) {
-        logout();
-      } else {
-        setError(`Falha ao atualizar as reuniões: ${err.message}`);
-      }
+      console.error("Erro ao atualizar reuniões:", err);
+      setError('Falha ao buscar novas reuniões.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, maxWidth: 1600, mx: 'auto' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
-          <Typography variant="h6">
-              Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
-          </Typography>
-          <Button variant="outlined" color="secondary" onClick={logout}>
-              Sair
-          </Button>
+    <Box sx={{ p: { xs: 2, sm: 3, md: 4 } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+        <InsightsIcon sx={{ fontSize: '2.5rem', color: 'primary.main', mr: 1.5 }} />
+        <Typography variant="h4" sx={{ fontWeight: 'bold' }}>Dashboard de Análise de Reuniões</Typography>
       </Box>
 
-      <Fade in timeout={800}>
-        <Tooltip title="Clique para resetar os filtros" arrow placement="bottom">
-          <Box
-            onClick={handleTitleClick}
-            sx={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: { xs: 1, sm: 2 },
-              mb: 5, cursor: 'pointer', '&:hover': { transform: 'scale(1.025)' }
-            }}
-          >
-            <InsightsIcon sx={{ fontSize: { xs: '2.5rem', sm: '3.5rem' }, color: 'primary.main' }} />
-            <Typography
-              variant="h3" component="h1"
-              sx={{
-                fontWeight: 800,
-                background: (theme) => `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.secondary.main} 90%)`,
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent'
-              }}
-            >
-              Painel de Análises
-            </Typography>
-          </Box>
-        </Tooltip>
-      </Fade>
-
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mb: 4 }}>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
-            <Box sx={{ flexGrow: 1 }}>
-              <Filters
-                filter={filter}
-                setFilter={setFilter}
-                keyword={keyword}
-                setKeyword={setKeyword}
-                startDate={startDate}
-                setStartDate={setStartDate}
-                endDate={endDate}
-                setEndDate={setEndDate}
-                onDateFilter={handleSetDateRange}
-              />
-            </Box>
+      <Box sx={{ mb: 4 }}>
+        <Filters
+          filter={filter} setFilter={setFilter}
+          keyword={keyword} setKeyword={setKeyword}
+          startDate={startDate} setStartDate={setStartDate}
+          endDate={endDate} setEndDate={setEndDate}
+          onDateFilter={(start, end) => { setStartDate(start); setEndDate(end); }}
+        />
+        <Box mt={2} display="flex" justifyContent="flex-end">
             <Tooltip title="Recarregar e avaliar novas reuniões">
               <Button
                 variant="contained" color="secondary" onClick={handleRefresh}
@@ -224,7 +207,7 @@ const Dashboard = () => {
       ) : (
         <Grid container spacing={3}>
           {meetings.map((meeting) => (
-            <Grid key={meeting.id} xs={12} sm={6} md={4}> {/* Removida prop 'item' para compatibilidade com MUI v5+ */}
+            <Grid item key={meeting.id} xs={12} sm={6} md={4}>
               <MeetingCard meeting={meeting} />
             </Grid>
           ))}
