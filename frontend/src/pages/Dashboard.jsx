@@ -31,26 +31,18 @@ const Dashboard = () => {
   const [endDate, setEndDate] = useState(null);
   const [chartData, setChartData] = useState([]);
 
-  const fetchMeetings = useCallback(async (start, end) => {
+  const fetchMeetings = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      let url = `${import.meta.env.VITE_API_URL}/api/meetings`;
-      
-      if (start && end) {
-        const formattedStart = format(start, 'yyyy-MM-dd');
-        const formattedEnd = format(end, 'yyyy-MM-dd');
-        url += `?startDate=${formattedStart}&endDate=${formattedEnd}`;
-      }
-      
-      const response = await axios.get(url);
-      
+      const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/meetings`, {
+          headers: { Authorization: `Bearer ${token}` }
+      });
       const formattedMeetings = response.data.map(meeting => ({
-          ...meeting,
-          evaluationText: meeting.evaluation_text 
+        ...meeting,
+        evaluationText: meeting.evaluation_text 
       }));
-
       setOriginalMeetings(formattedMeetings);
-      setError(null);
     } catch (err) {
       if (err.response && (err.response.status === 401 || err.response.status === 403)) {
         logout();
@@ -60,21 +52,24 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [logout]);
+  }, [token, logout]);
 
   useEffect(() => {
-    if ((startDate && endDate) || (!startDate && !endDate)) {
-      fetchMeetings(startDate, endDate);
-    }
-  }, [startDate, endDate, fetchMeetings]);
+    fetchMeetings();
+  }, [fetchMeetings]);
 
-  const handleSetDateRange = (start, end) => {
-    setStartDate(start);
-    setEndDate(end);
-  };
-
-  useEffect(() => {
+  const applyFilters = useCallback(() => {
     let processedMeetings = [...originalMeetings];
+
+    // Filtro por data
+    if (startDate && endDate) {
+        processedMeetings = processedMeetings.filter(m => {
+            const meetingDate = new Date(m.start_time);
+            return meetingDate >= startDate && meetingDate <= endDate;
+        });
+    }
+
+    // Filtro por palavra-chave
     if (keyword.trim() !== '') {
       const lowerCaseKeyword = keyword.toLowerCase();
       processedMeetings = processedMeetings.filter(meeting =>
@@ -82,8 +77,10 @@ const Dashboard = () => {
         (meeting.owner_name || '').toLowerCase().includes(lowerCaseKeyword)
       );
     }
+
+    // Filtro de status e ordenação
     if (filter === 'not_conducted') {
-      processedMeetings = processedMeetings.filter(m => m.score === 0);
+      processedMeetings = processedMeetings.filter(m => m.score === 0 || m.score === -1);
     } else {
       processedMeetings = processedMeetings.filter(m => m.score > 0);
       if (filter === 'score_desc') {
@@ -92,8 +89,15 @@ const Dashboard = () => {
         processedMeetings.sort((a, b) => a.score - b.score);
       }
     }
+
     setMeetings(processedMeetings);
-  }, [filter, keyword, originalMeetings]);
+  }, [originalMeetings, startDate, endDate, keyword, filter]);
+
+
+  useEffect(() => {
+    applyFilters();
+  }, [applyFilters]);
+  
 
   useEffect(() => {
     if (originalMeetings.length === 0) return;
@@ -121,23 +125,27 @@ const Dashboard = () => {
   const handleTitleClick = () => {
     setFilter('all');
     setKeyword('');
-    handleSetDateRange(null, null);
+    setStartDate(null);
+    setEndDate(null);
   };
 
+  // 👇 CORREÇÃO APLICADA AQUI 👇
   const handleRefresh = async () => {
     setLoading(true);
+    setError(null);
     try {
-      await axios.post(`${import.meta.env.VITE_API_URL}/api/update`, {}, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      // Alterado de POST /api/update para GET /api/refresh-meetings
+      await axios.get(`${import.meta.env.VITE_API_URL}/api/refresh-meetings`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      await fetchMeetings(startDate, endDate); 
-      setError(null);
+      // Após atualizar, buscamos a lista completa novamente
+      await fetchMeetings(); 
     } catch (err) {
        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
         logout();
-      } else {
-        setError(`Falha ao atualizar as reuniões: ${err.message}`);
-      }
+       } else {
+         setError(`Falha ao atualizar as reuniões: ${err.response ? err.response.data.error : err.message}`);
+       }
     } finally {
       setLoading(false);
     }
@@ -147,10 +155,10 @@ const Dashboard = () => {
     <Box sx={{ p: { xs: 2, sm: 4 }, maxWidth: 1600, mx: 'auto' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
           <Typography variant="h6">
-              Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
+            Bem-vindo(a), <strong>{user?.name}</strong>
           </Typography>
           <Button variant="outlined" color="secondary" onClick={logout}>
-              Sair
+            Sair
           </Button>
       </Box>
 
@@ -190,7 +198,6 @@ const Dashboard = () => {
                 setStartDate={setStartDate}
                 endDate={endDate}
                 setEndDate={setEndDate}
-                onDateFilter={handleSetDateRange}
               />
             </Box>
             <Tooltip title="Recarregar e avaliar novas reuniões">
@@ -224,7 +231,7 @@ const Dashboard = () => {
       ) : (
         <Grid container spacing={3}>
           {meetings.map((meeting) => (
-            <Grid key={meeting.id} xs={12} sm={6} md={4}> {/* Removida prop 'item' para compatibilidade com MUI v5+ */}
+            <Grid item key={meeting.session_id} xs={12} sm={6} md={4}>
               <MeetingCard meeting={meeting} />
             </Grid>
           ))}
