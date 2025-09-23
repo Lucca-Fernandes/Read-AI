@@ -12,7 +12,6 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
-
 const allowedOrigins = [
     'http://localhost:5173',
     process.env.FRONTEND_URL
@@ -28,7 +27,6 @@ app.use(cors({
     }
 }));
 
-
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
@@ -36,96 +34,94 @@ const pool = new Pool({
     }
 });
 
-
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-// --- FUNÇÕES AUXILIARES ---
+// --- FUNÇÃO DE ANÁLISE HÍBRIDA (PLANO A + PLANO B) ---
 
 const parseEvaluationText = (text, sessionId) => {
-  const logId = `[Parse LOG | Session: ${sessionId || 'N/A'}]`;
-  console.log(`${logId} Iniciando análise do texto recebido da IA.`);
+    const logId = `[Parse LOG | Session: ${sessionId || 'N/A'}]`;
 
-  if (!text || typeof text !== 'string') {
-    console.error(`${logId} ERRO: Texto de avaliação é inválido ou ausente.`);
-    return { finalScore: -2 }; // -2 = Falha na Análise
-  }
-  
-  try {
-    const lines = text.split('\n').filter(line => line.trim() !== '');
-    const sections = [];
-    let currentSection = null;
-    let summary = '';
-    let hasMatchedAnyLine = false; 
-
-    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i;
-    const summaryMatch = text.match(summaryRegex);
-    if (summaryMatch) {
-      summary = summaryMatch[1].trim();
+    if (!text || typeof text !== 'string') {
+        console.error(`${logId} ERRO: Texto de avaliação é inválido.`);
+        return { finalScore: -2 }; // -2 = Falha na Análise
     }
 
-    lines.forEach((line, index) => {
-      const trimmedLine = line.trim();
-      if (!trimmedLine) return;
+    // --- PLANO A: Tenta a análise estruturada ---
+    try {
+        console.log(`${logId} Iniciando Plano A: Análise Estruturada.`);
+        const lines = text.split('\n').filter(line => line.trim() !== '');
+        const sections = [];
+        let currentSection = null;
 
-      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+)\s*pontos?\)\*\*/i;
-      const headerMatch = trimmedLine.match(sectionHeaderRegex);
-      if (headerMatch) {
-        if (currentSection) sections.push(currentSection);
-        currentSection = {
-          title: headerMatch[1].trim(),
-          maxPoints: parseInt(headerMatch[2], 10),
-          criteria: []
-        };
-        console.log(`${logId} [Linha ${index+1}] OK - Encontrada SEÇÃO: "${currentSection.title}"`);
-        hasMatchedAnyLine = true;
-        return;
-      }
-      
-      const criteriaRegex = /-\s*(.*?)\s*\(([^)]*)\):\s*(-?\d+)\s*(?:\((.*)\))?/i;
-      const criteriaMatch = trimmedLine.match(criteriaRegex);
-      if (criteriaMatch && currentSection) {
-        const awardedPoints = parseInt(criteriaMatch[3], 10);
-        currentSection.criteria.push({
-          text: criteriaMatch[1].trim(),
-          awardedPoints: awardedPoints,
-          justification: (criteriaMatch[4] || '').trim(),
+        lines.forEach(line => {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) return;
+
+            const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+)\s*pontos?\)\*\*/i;
+            const headerMatch = trimmedLine.match(sectionHeaderRegex);
+            if (headerMatch) {
+                if (currentSection) sections.push(currentSection);
+                currentSection = { title: headerMatch[1].trim(), criteria: [] };
+                return;
+            }
+
+            const criteriaRegex = /-\s*(.*?)\s*\(([^)]*)\):\s*(-?\d+)\s*(?:\((.*)\))?/i;
+            const criteriaMatch = trimmedLine.match(criteriaRegex);
+            if (criteriaMatch && currentSection) {
+                currentSection.criteria.push({ awardedPoints: parseInt(criteriaMatch[3], 10) });
+                return;
+            }
         });
-        console.log(`${logId} [Linha ${index+1}] OK - Encontrado CRITÉRIO: "${criteriaMatch[1].trim()}" | Pontos: ${awardedPoints}`);
-        hasMatchedAnyLine = true;
-        return;
-      }
 
-      if (!summaryRegex.test(trimmedLine)) {
-         console.warn(`${logId} [Linha ${index+1}] AVISO - Linha não reconhecida: "${trimmedLine}"`);
-      }
-    });
+        if (currentSection) sections.push(currentSection);
 
-    if (currentSection) sections.push(currentSection);
-
-    if (sections.length > 0 && sections.some(s => s.criteria.length > 0)) {
-        const finalScore = sections.reduce((total, section) => {
-          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
-        }, 0);
+        if (sections.length > 0 && sections.some(s => s.criteria.length > 0)) {
+            const finalScore = sections.reduce((total, section) => 
+                total + section.criteria.reduce((sum, crit) => sum + crit.awardedPoints, 0), 0);
+            
+            console.log(`${logId} SUCESSO com Plano A. Nota: ${finalScore}`);
+            return { finalScore };
+        }
         
-        console.log(`${logId} SUCESSO - Análise concluída. Nota final calculada: ${finalScore}`);
-        return { finalScore };
-    }
-    
-    console.error(`${logId} ERRO FATAL - Nenhuma seção ou critério válido foi encontrado no texto. A estrutura da resposta da IA está irreconhecível.`);
-    console.error(`${logId} [TEXTO COMPLETO COM PROBLEMA]:\n---\n${text}\n---`);
-    return { finalScore: -2 }; 
+        // Se o Plano A não encontrou seções, ele vai para o catch intencionalmente.
+        throw new Error("Plano A falhou em encontrar seções estruturadas. Ativando Plano B.");
 
-  } catch (error) {
-    console.error(`${logId} ERRO CATASTRÓFICO durante a análise:`, error);
-    console.error(`${logId} [TEXTO COMPLETO COM PROBLEMA]:\n---\n${text}\n---`);
-    return { finalScore: -2 };
-  }
+    } catch (error) {
+        // --- PLANO B: Mecanismo de Fallback ---
+        console.warn(`${logId} AVISO: ${error.message}`);
+        console.log(`${logId} Iniciando Plano B: Fallback com Regex individual.`);
+
+        const scores = {
+            week: text.match(/Perguntou sobre a semana do aluno\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            newGoal: text.match(/Estipou uma nova meta para o aluno\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            content: text.match(/Perguntou sobre o conteúdo estudado\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            exercises: text.match(/Perguntou sobre os exercícios\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            organization: text.match(/Demonstrou boa condução e organização\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            extraSupport: text.match(/Ofereceu apoio extra \(dicas, recursos\)\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            goalFeedback: text.match(/Feedback sobre a meta\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+        };
+
+        const finalScore = Object.values(scores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
+
+        if (finalScore > 0) {
+            console.log(`${logId} SUCESSO com Plano B. Nota calculada: ${finalScore}`);
+            return { finalScore };
+        }
+
+        console.error(`${logId} ERRO FATAL: Plano A e Plano B falharam. Formato irreconhecível.`);
+        console.error(`${logId} [TEXTO COMPLETO COM PROBLEMA]:\n---\n${text}\n---`);
+        return { finalScore: -2 };
+    }
 };
 
-
 const evaluateMeetingWithGemini = async (meeting) => {
-    // Score -1: Erro de API | Score -2: Erro de Análise/Parse
     const nonConductedSummary = "No summary available due to limited meeting data.";
     if ((meeting.summary || '').trim() === nonConductedSummary) {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
@@ -172,7 +168,6 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
-        
         const { finalScore } = parseEvaluationText(responseText, meeting.session_id);
         
         return { score: finalScore, evaluationText: responseText };
@@ -217,7 +212,6 @@ async function fetchFromSheets() {
 }
 
 // --- ROTAS DE AUTENTICAÇÃO --- (código omitido por brevidade, continua o mesmo)
-
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'monitor' } = req.body;
     if (!name || !email || !password) {
@@ -348,9 +342,7 @@ const authenticateToken = (req, res, next) => {
 
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
-        // 👇 CORREÇÃO CRÍTICA DO ERRO 500 👇
-        const { startDate, endDate } = req.query; // Alterado de req.body para req.query
-
+        const { startDate, endDate } = req.query; 
         const { role, name } = req.user;
         let query = 'SELECT * FROM meetings';
         const queryParams = [];
