@@ -42,30 +42,35 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-const parseEvaluationText = (text) => {
+// 👇 ALTERAÇÃO PRINCIPAL: FUNÇÃO COM LOGS DETALHADOS PARA DEPURAÇÃO 👇
+const parseEvaluationText = (text, sessionId) => {
+  const logId = `[Parse LOG | Session: ${sessionId || 'N/A'}]`;
+  console.log(`${logId} Iniciando análise do texto recebido da IA.`);
+
   if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
+    console.error(`${logId} ERRO: Texto de avaliação é inválido ou ausente.`);
+    return { finalScore: -2 }; // -2 = Falha na Análise
   }
   
   try {
-    console.log("Iniciando parse da avaliação. Calculando pontuação a partir da soma dos critérios...");
-
     const lines = text.split('\n').filter(line => line.trim() !== '');
     const sections = [];
     let currentSection = null;
     let summary = '';
-    
-    // Regex para extrair o resumo, ignorando maiúsculas/minúsculas
+    let hasMatchedAnyLine = false; // Flag para verificar se alguma linha foi útil
+
     const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i;
     const summaryMatch = text.match(summaryRegex);
     if (summaryMatch) {
       summary = summaryMatch[1].trim();
     }
 
-    lines.forEach(line => {
-      // Regex para o cabeçalho da seção (ex: **Progresso do Aluno (Peso Total: 50 pontos)**)
+    lines.forEach((line, index) => {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) return;
+
       const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+)\s*pontos?\)\*\*/i;
-      const headerMatch = line.match(sectionHeaderRegex);
+      const headerMatch = trimmedLine.match(sectionHeaderRegex);
       if (headerMatch) {
         if (currentSection) sections.push(currentSection);
         currentSection = {
@@ -73,46 +78,57 @@ const parseEvaluationText = (text) => {
           maxPoints: parseInt(headerMatch[2], 10),
           criteria: []
         };
-        return; // Pula para a próxima linha
+        console.log(`${logId} [Linha ${index+1}] OK - Encontrada SEÇÃO: "${currentSection.title}"`);
+        hasMatchedAnyLine = true;
+        return;
       }
       
-      // Regex dos critérios corrigido e robusto para lidar com justificativas entre parênteses
       const criteriaRegex = /-\s*(.*?)\s*\(([^)]*)\):\s*(-?\d+)\s*(?:\((.*)\))?/i;
-      const criteriaMatch = line.match(criteriaRegex);
-
+      const criteriaMatch = trimmedLine.match(criteriaRegex);
       if (criteriaMatch && currentSection) {
+        const awardedPoints = parseInt(criteriaMatch[3], 10);
         currentSection.criteria.push({
           text: criteriaMatch[1].trim(),
-          // O grupo de captura da pontuação e justificativa mudou com o novo Regex:
-          awardedPoints: parseInt(criteriaMatch[3], 10), // A pontuação agora está no 3º grupo
-          justification: (criteriaMatch[4] || '').trim(),   // A justificativa agora está no 4º grupo
+          awardedPoints: awardedPoints,
+          justification: (criteriaMatch[4] || '').trim(),
         });
-        return; // Pula para a próxima linha
+        console.log(`${logId} [Linha ${index+1}] OK - Encontrado CRITÉRIO: "${criteriaMatch[1].trim()}" | Pontos: ${awardedPoints}`);
+        hasMatchedAnyLine = true;
+        return;
+      }
+
+      // Se a linha não for um cabeçalho, nem um critério, nem parte do resumo já extraído, registramos como um problema.
+      if (!summaryRegex.test(trimmedLine)) {
+         console.warn(`${logId} [Linha ${index+1}] AVISO - Linha não reconhecida: "${trimmedLine}"`);
       }
     });
 
     if (currentSection) sections.push(currentSection);
 
-    if (sections.length > 0) {
+    if (sections.length > 0 && sections.some(s => s.criteria.length > 0)) {
         const finalScore = sections.reduce((total, section) => {
           return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
         }, 0);
         
-        console.log(`Parse bem-sucedido. Nota final calculada: ${finalScore}`);
-        return { sections, summary, finalScore };
+        console.log(`${logId} SUCESSO - Análise concluída. Nota final calculada: ${finalScore}`);
+        return { finalScore };
     }
     
-    console.warn("AVISO: Nenhuma seção ou critério foi encontrado no formato esperado. A avaliação falhou.");
-    return { sections: [], summary: summary || 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1 };
+    // Se não encontrou nenhuma seção ou critério válido, a análise falhou.
+    console.error(`${logId} ERRO FATAL - Nenhuma seção ou critério válido foi encontrado no texto. A estrutura da resposta da IA está irreconhecível.`);
+    console.error(`${logId} [TEXTO COMPLETO COM PROBLEMA]:\n---\n${text}\n---`);
+    return { finalScore: -2 }; // -2 = Falha na Análise (formato irreconhecível)
 
   } catch (error) {
-    console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
-    return { sections: [], summary: 'Erro interno ao processar a avaliação.', finalScore: -1 };
+    console.error(`${logId} ERRO CATASTRÓFICO durante a análise:`, error);
+    console.error(`${logId} [TEXTO COMPLETO COM PROBLEMA]:\n---\n${text}\n---`);
+    return { finalScore: -2 };
   }
 };
 
 
 const evaluateMeetingWithGemini = async (meeting) => {
+    // Score -1: Erro de API | Score -2: Erro de Análise/Parse
     const nonConductedSummary = "No summary available due to limited meeting data.";
     if ((meeting.summary || '').trim() === nonConductedSummary) {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
@@ -160,13 +176,14 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
         
-        const { finalScore } = parseEvaluationText(responseText);
+        // Passamos o ID da sessão para os logs.
+        const { finalScore } = parseEvaluationText(responseText, meeting.session_id);
         
         return { score: finalScore, evaluationText: responseText };
 
     } catch (err) {
-        console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
-        return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
+        console.error(`[Gemini API Error | Session: ${meeting.session_id}] Erro ao avaliar:`, err);
+        return { score: -1, evaluationText: `FALHA DE API: ${err.message}` }; // -1 = Falha de API
     }
 };
 
@@ -242,7 +259,7 @@ app.post('/api/login', async (req, res) => {
         if (!isMatch) {
             return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; // Token expira em 8 horas
+        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) };
         const token = jwt.sign(payload, process.env.JWT_SECRET);
         res.json({ token, user: payload });
     } catch (err) {
@@ -262,7 +279,7 @@ app.post('/api/forgot-password', async (req, res) => {
         }
         const user = userResult.rows[0];
         const token = crypto.randomBytes(32).toString('hex');
-        const expires = new Date(Date.now() + 3600000); // 1 hora
+        const expires = new Date(Date.now() + 3600000);
         await pool.query(
             "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
             [token, expires, email]
@@ -327,7 +344,7 @@ const authenticateToken = (req, res, next) => {
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) {
             console.error('Erro na verificação do token:', err);
-            return res.sendStatus(403); // Forbidden
+            return res.sendStatus(403);
         }
         req.user = user;
         next();
@@ -338,7 +355,7 @@ const authenticateToken = (req, res, next) => {
 
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate } = req.body;
         const { role, name } = req.user;
         let query = 'SELECT * FROM meetings';
         const queryParams = [];
