@@ -12,19 +12,13 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
-
-// 👇 ALTERAÇÃO 1: CONFIGURAÇÃO DE CORS 👇
-// Adicionamos as URLs que podem acessar sua API.
-// A de localhost é para seu ambiente de desenvolvimento.
-// A outra é um placeholder para a URL do seu frontend quando ele estiver no ar.
 const allowedOrigins = [
     'http://localhost:5173',
-    process.env.FRONTEND_URL // Vamos criar essa variável de ambiente na Vercel
+    process.env.FRONTEND_URL
 ];
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite requisições sem 'origin' (como de apps mobile ou Postman) e as da nossa lista.
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -47,78 +41,44 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
+// 👇 ALTERAÇÃO PRINCIPAL: LÓGICA DE CÁLCULO DA NOTA CORRIGIDA E ROBUSTA 👇
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
+    // Retorna -1 se o texto for inválido, indicando uma falha clara.
+    return { score: -1, evaluationText: 'Texto de avaliação inválido ou ausente.' };
   }
   
   try {
-    const finalScoreRegex = /FINAL_SCORE:\s*(-?\d+)/;
-    const scoreMatch = text.match(finalScoreRegex);
+    // Este Regex é mais flexível:
+    // - Procura por um número (positivo ou negativo) dentro de parênteses.
+    // - Ignora se está escrito "ponto" ou "pontos".
+    // - Ignora maiúsculas/minúsculas (/i).
+    // - Procura em todo o texto (/g).
+    // - Lida com a variação "REDUTOR DE".
+    const pointsRegex = /\*.*?\((?:REDUTOR DE )?(-?\d+)\s*ponto?s?\)/gi;
 
-    if (scoreMatch && scoreMatch[1]) {
-      const finalScoreFromLine = parseInt(scoreMatch[1], 10);
-      const cleanText = text.replace(finalScoreRegex, '').trim();
-      const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
-      const summaryMatch = cleanText.match(summaryRegex);
-      const summary = summaryMatch ? summaryMatch[1].trim() : 'Resumo não encontrado.';
-      return { sections: [], summary, finalScore: finalScoreFromLine };
+    let totalPoints = 0;
+    let matchesFound = false;
+    let match;
+
+    // Itera sobre todas as correspondências encontradas no texto.
+    while ((match = pointsRegex.exec(text)) !== null) {
+      matchesFound = true;
+      // Soma o ponto encontrado (convertido para número).
+      totalPoints += parseInt(match[1], 10);
     }
 
-    console.warn("AVISO: A linha 'FINAL_SCORE:' não foi encontrada. Calculando a partir dos critérios.");
+    // Se encontramos critérios, usamos a soma. Se não, a avaliação falhou (retornamos -1).
+    const finalScore = matchesFound ? Math.max(0, totalPoints) : -1; // Garante que a nota não seja negativa.
 
-    const lines = text.split('\n').filter(line => line.trim() !== '');
-    const sections = [];
-    let currentSection = null;
-    let summary = '';
-    
-    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/;
-    const summaryMatch = text.match(summaryRegex);
-    if (summaryMatch) {
-      summary = summaryMatch[1].trim();
-    }
-
-    lines.forEach(line => {
-      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
-      const headerMatch = line.match(sectionHeaderRegex);
-      if (headerMatch) {
-        if (currentSection) sections.push(currentSection);
-        currentSection = {
-          title: headerMatch[1].trim(),
-          maxPoints: parseInt(headerMatch[2], 10),
-          criteria: []
-        };
-        return;
-      }
-      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
-      const criteriaMatch = line.match(criteriaRegex);
-      if (criteriaMatch && currentSection) {
-        currentSection.criteria.push({
-          text: criteriaMatch[1].trim(),
-          maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
-          awardedPoints: parseInt(criteriaMatch[3], 10),
-          justification: (criteriaMatch[4] || '').trim(),
-        });
-        return;
-      }
-    });
-
-    if (currentSection) sections.push(currentSection);
-
-    if (sections.length > 0) {
-        const finalScore = sections.reduce((total, section) => {
-          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
-        }, 0);
-        return { sections, summary, finalScore };
-    }
-    
-    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1, rawText: text };
+    return { score: finalScore, evaluationText: text };
 
   } catch (error) {
     console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
-    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1, rawText: text };
+    return { score: -1, evaluationText: text };
   }
 };
+
 
 const evaluateMeetingWithGemini = async (meeting) => {
     const nonConductedSummary = "No summary available due to limited meeting data.";
@@ -169,8 +129,13 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
-        const { finalScore } = parseEvaluationText(responseText);
-        return { score: finalScore, evaluationText: responseText };
+        
+        // 👇 ALTERAÇÃO AQUI: Usando a nova função que retorna 'score' 👇
+        const { score } = parseEvaluationText(responseText);
+        
+        // Retornamos o score calculado e o texto original da IA.
+        return { score, evaluationText: responseText };
+
     } catch (err) {
         console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
         return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
@@ -281,9 +246,7 @@ app.post('/api/forgot-password', async (req, res) => {
                 pass: process.env.EMAIL_PASS,
             },
         });
-
-        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
-        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
+        
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
@@ -408,10 +371,6 @@ app.post('/api/update', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Erro ao atualizar reuniões.' });
     }
 });
-
-// A Vercel gerencia a porta, então não precisamos mais de app.listen
-// const PORT = process.env.PORT || 3000;
-// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
 
 // Exporta o app para a Vercel
 module.exports = app;
