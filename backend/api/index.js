@@ -12,11 +12,11 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
+// Configuração de CORS para produção e desenvolvimento
 const allowedOrigins = [
     'http://localhost:5173',
-    process.env.FRONTEND_URL
+    process.env.FRONTEND_URL 
 ];
-
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
@@ -27,6 +27,7 @@ app.use(cors({
     }
 }));
 
+// Configuração do Banco de Dados para Vercel/Produção
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
@@ -37,93 +38,90 @@ const pool = new Pool({
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-// --- FUNÇÃO DE ANÁLISE CENTRALIZADA ---
-const parseEvaluationTextToJSON = (text, sessionId) => {
-    const logId = `[Parse LOG | Session: ${sessionId || 'N/A'}]`;
-    console.log(`${logId} Iniciando análise para gerar JSON estruturado.`);
+// --- FUNÇÕES AUXILIARES ---
 
+const parseEvaluationText = (text) => {
     if (!text || typeof text !== 'string') {
-        console.error(`${logId} ERRO: Texto de avaliação é inválido.`);
-        return { score: -2, details: null };
+        return { finalScore: -1 };
     }
-
     try {
         const lines = text.split('\n').filter(line => line.trim() !== '');
-        const result = { sections: [], summary: 'Resumo não encontrado.', finalScore: 0 };
+        const sections = [];
         let currentSection = null;
-
-        const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i;
-        const summaryMatch = text.match(summaryRegex);
-        if (summaryMatch) {
-            result.summary = summaryMatch[1].trim();
-        }
-
-        lines.forEach((line, index) => {
-            const trimmedLine = line.trim();
-            if (!trimmedLine || summaryRegex.test(trimmedLine)) return;
-
-            const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+)\s*pontos?\)\*\*/i;
-            const headerMatch = trimmedLine.match(sectionHeaderRegex);
+        
+        lines.forEach(line => {
+            const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
+            const headerMatch = line.match(sectionHeaderRegex);
             if (headerMatch) {
-                if (currentSection) result.sections.push(currentSection);
-                currentSection = { title: headerMatch[1].trim(), criteria: [] };
+                if (currentSection) sections.push(currentSection);
+                currentSection = { criteria: [] };
                 return;
             }
 
-            const criteriaRegex = /-\s*(.*?)\s*\(([^)]*)\):\s*(-?\d+)\s*(?:\((.*)\))?/i;
-            const criteriaMatch = trimmedLine.match(criteriaRegex);
+            const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
+            const criteriaMatch = line.match(criteriaRegex);
             if (criteriaMatch && currentSection) {
                 currentSection.criteria.push({
-                    text: criteriaMatch[1].trim(),
                     awardedPoints: parseInt(criteriaMatch[3], 10),
-                    justification: (criteriaMatch[4] || '').trim(),
                 });
                 return;
             }
-             console.warn(`${logId} [Linha ${index+1}] AVISO - Linha não reconhecida: "${trimmedLine}"`);
         });
+        if (currentSection) sections.push(currentSection);
 
-        if (currentSection) result.sections.push(currentSection);
-
-        if (result.sections.length > 0 && result.sections.some(s => s.criteria.length > 0)) {
-            const finalScore = result.sections.reduce((total, section) => {
-                return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
-            }, 0);
-            result.finalScore = finalScore;
-            console.log(`${logId} SUCESSO - Análise concluída. Nota: ${finalScore}`);
-            return { score: finalScore, details: result };
+        // Se após ler todas as linhas, nenhuma seção válida foi criada, a análise falhou.
+        if (sections.length === 0) {
+             throw new Error("Nenhuma seção ou critério estruturado foi encontrado no texto.");
         }
 
-        console.error(`${logId} ERRO FATAL - Nenhuma seção válida encontrada.`);
-        return { score: -2, details: null };
+        const finalScore = sections.reduce((total, section) => {
+            return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+        }, 0);
+
+        return { finalScore };
 
     } catch (error) {
-        console.error(`${logId} ERRO CATASTRÓFICO:`, error);
-        return { score: -2, details: null };
+        console.error("Falha na análise estruturada, ativando fallback:", error.message);
+        // Fallback: Tenta somar os pontos de forma mais simples se a estrutura falhar
+        const fallbackScores = {
+            week: text.match(/Perguntou sobre a semana do aluno\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            content: text.match(/Perguntou sobre o conteúdo estudado\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            exercises: text.match(/Perguntou sobre os exercícios\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            organization: text.match(/Demonstrou boa condução e organização\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            extraSupport: text.match(/Ofereceu apoio extra.*?\(dicas, recursos\)\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+            goalFeedback: text.match(/Feedback sobre a meta\s*\(.*?pontos\):\s*(\d+)/i)?.[1] || 0,
+        };
+        const fallbackFinalScore = Object.values(fallbackScores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
+        
+        return { finalScore: fallbackFinalScore > 0 ? fallbackFinalScore : -1 };
     }
 };
 
 const evaluateMeetingWithGemini = async (meeting) => {
     const nonConductedSummary = "No summary available due to limited meeting data.";
     if ((meeting.summary || '').trim() === nonConductedSummary) {
-        return { score: 0, evaluationText: 'Não realizada.', details: null };
+        return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
     }
     try {
-        const prompt = `Analise a transcrição da reunião de monitoria...`; // O prompt continua o mesmo
+        const prompt = `Analise a transcrição da reunião de monitoria...`; // O prompt permanece o mesmo
         
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
-        const { score, details } = parseEvaluationTextToJSON(responseText, meeting.session_id);
-        
-        return { score, evaluationText: responseText, details };
-
+        const { finalScore } = parseEvaluationText(responseText);
+        return { score: finalScore, evaluationText: responseText };
     } catch (err) {
-        console.error(`[Gemini API Error | Session: ${meeting.session_id}] Erro ao avaliar:`, err);
-        return { score: -1, evaluationText: `FALHA DE API: ${err.message}`, details: null };
+        console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
+        return { score: -1, evaluationText: `FALHA: Erro de API. ${err.message}` };
     }
 };
 
-// 👇 CORREÇÃO IMPLEMENTADA AQUI 👇
 async function fetchFromSheets() {
     const API_KEY = process.env.GOOGLE_API_KEY;
     const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -134,8 +132,7 @@ async function fetchFromSheets() {
     const rows = response.data.values || [];
     
     return rows.slice(1).map((row) => ({
-        // Se a row[0] (coluna A) existir e não for vazia, use-a. 
-        // Senão, gere um ID único para garantir que a reunião não seja descartada.
+        // CORREÇÃO CRÍTICA: Gera um ID único se a célula A estiver vazia
         session_id: row[0] || `generated-${crypto.randomUUID()}`,
         meeting_title: row[1] || 'Sem título',
         start_time: row[2] || null,
@@ -159,7 +156,7 @@ async function fetchFromSheets() {
     }));
 }
 
-// --- RESTANTE DO CÓDIGO (ROTAS, ETC.) ---
+// --- ROTAS DE AUTENTICAÇÃO E APLICAÇÃO --- (código inalterado)
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'monitor' } = req.body;
     if (!name || !email || !password) {
@@ -323,22 +320,23 @@ app.post('/api/update', authenticateToken, async (req, res) => {
             return res.json({ message: 'Nenhuma nova reunião encontrada para adicionar.' });
         }
         const evaluated = await Promise.all(newMeetings.map(async (m) => {
-            const { score, evaluationText, details } = await evaluateMeetingWithGemini(m);
-            return { ...m, score, evaluation_raw_text: evaluationText, evaluation_details: details };
+            const { score, evaluationText } = await evaluateMeetingWithGemini(m);
+            return { ...m, score, evaluation_text: evaluationText };
         }));
         for (const m of evaluated) {
             await pool.query(`
                 INSERT INTO meetings (
                     session_id, meeting_title, owner_name, summary, topics, sentiments,
-                    chapters, transcript, participants, start_time, report_url, 
-                    score, evaluation_raw_text, evaluation_details
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    chapters, transcript, participants, start_time, report_url, score, evaluation_text
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             `, [
                 m.session_id, m.meeting_title, m.owner_name, m.summary,
-                JSON.stringify(m.topics || []), m.sentiments,
-                JSON.stringify(m.chapters || []), m.transcript,
-                JSON.stringify(m.participants || []), m.start_time, m.report_url,
-                m.score, m.evaluation_raw_text, m.evaluation_details
+                JSON.stringify(m.topics || []),
+                m.sentiments,
+                JSON.stringify(m.chapters || []),
+                m.transcript,
+                JSON.stringify(m.participants || []),
+                m.start_time, m.report_url, m.score, m.evaluation_text
             ]);
         }
         res.json({ message: `Adicionadas ${evaluated.length} novas reuniões.` });
@@ -348,4 +346,5 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
+// Exporta o app para a Vercel
 module.exports = app;
