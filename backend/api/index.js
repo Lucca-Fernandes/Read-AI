@@ -37,23 +37,19 @@ const pool = new Pool({
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-// --- FUNÇÃO DE ANÁLISE CENTRALIZADA E ROBUSTA ---
+// --- FUNÇÃO DE ANÁLISE CENTRALIZADA ---
 const parseEvaluationTextToJSON = (text, sessionId) => {
     const logId = `[Parse LOG | Session: ${sessionId || 'N/A'}]`;
     console.log(`${logId} Iniciando análise para gerar JSON estruturado.`);
 
     if (!text || typeof text !== 'string') {
         console.error(`${logId} ERRO: Texto de avaliação é inválido.`);
-        return { score: -2, details: null }; // -2 = Falha na Análise
+        return { score: -2, details: null };
     }
 
     try {
         const lines = text.split('\n').filter(line => line.trim() !== '');
-        const result = {
-            sections: [],
-            summary: 'Resumo não encontrado.',
-            finalScore: 0
-        };
+        const result = { sections: [], summary: 'Resumo não encontrado.', finalScore: 0 };
         let currentSection = null;
 
         const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i;
@@ -70,10 +66,7 @@ const parseEvaluationTextToJSON = (text, sessionId) => {
             const headerMatch = trimmedLine.match(sectionHeaderRegex);
             if (headerMatch) {
                 if (currentSection) result.sections.push(currentSection);
-                currentSection = {
-                    title: headerMatch[1].trim(),
-                    criteria: []
-                };
+                currentSection = { title: headerMatch[1].trim(), criteria: [] };
                 return;
             }
 
@@ -167,6 +160,7 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
     }
 };
 
+// 👇 AQUI ESTÁ A CORREÇÃO PARA O PROBLEMA DAS REUNIÕES DESAPARECIDAS 👇
 async function fetchFromSheets() {
     const API_KEY = process.env.GOOGLE_API_KEY;
     const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -177,7 +171,9 @@ async function fetchFromSheets() {
     const rows = response.data.values || [];
     
     return rows.slice(1).map((row) => ({
-        session_id: row[0] || 'unknown',
+        // Se a row[0] (coluna A) existir e não estiver vazia, use-a. 
+        // Senão, gere um ID único usando o módulo 'crypto' do Node.js.
+        session_id: row[0] || `generated-${crypto.randomUUID()}`,
         meeting_title: row[1] || 'Sem título',
         start_time: row[2] || null,
         end_time: row[3] || null,
@@ -200,7 +196,7 @@ async function fetchFromSheets() {
     }));
 }
 
-// --- ROTAS DE AUTENTICAÇÃO E OUTRAS (inalteradas) ---
+// --- RESTANTE DO CÓDIGO (ROTAS, ETC.) ---
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'monitor' } = req.body;
     if (!name || !email || !password) {
