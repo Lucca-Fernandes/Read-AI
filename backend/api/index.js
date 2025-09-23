@@ -41,41 +41,75 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-// 👇 ALTERAÇÃO PRINCIPAL: LÓGICA DE CÁLCULO DA NOTA CORRIGIDA E ROBUSTA 👇
+// 👇 ALTERAÇÃO 2: LÓGICA DE PARSE MELHORADA E SEMPRE ATIVA 👇
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
-    // Retorna -1 se o texto for inválido, indicando uma falha clara.
-    return { score: -1, evaluationText: 'Texto de avaliação inválido ou ausente.' };
+    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
   
   try {
-    // Este Regex é mais flexível:
-    // - Procura por um número (positivo ou negativo) dentro de parênteses.
-    // - Ignora se está escrito "ponto" ou "pontos".
-    // - Ignora maiúsculas/minúsculas (/i).
-    // - Procura em todo o texto (/g).
-    // - Lida com a variação "REDUTOR DE".
-    const pointsRegex = /\*.*?\((?:REDUTOR DE )?(-?\d+)\s*ponto?s?\)/gi;
+    // REMOVEMOS o bloco que procurava por "FINAL_SCORE:".
+    // Agora, o cálculo será SEMPRE feito pela soma dos critérios.
 
-    let totalPoints = 0;
-    let matchesFound = false;
-    let match;
+    console.log("Calculando a pontuação a partir da soma dos critérios...");
 
-    // Itera sobre todas as correspondências encontradas no texto.
-    while ((match = pointsRegex.exec(text)) !== null) {
-      matchesFound = true;
-      // Soma o ponto encontrado (convertido para número).
-      totalPoints += parseInt(match[1], 10);
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const sections = [];
+    let currentSection = null;
+    let summary = '';
+    
+    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i; // Adicionado 'i' para ser case-insensitive
+    const summaryMatch = text.match(summaryRegex);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim();
     }
 
-    // Se encontramos critérios, usamos a soma. Se não, a avaliação falhou (retornamos -1).
-    const finalScore = matchesFound ? Math.max(0, totalPoints) : -1; // Garante que a nota não seja negativa.
+    lines.forEach(line => {
+      // Regex um pouco mais flexível para o cabeçalho
+      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+)\s*pontos?\)\*\*/i;
+      const headerMatch = line.match(sectionHeaderRegex);
+      if (headerMatch) {
+        if (currentSection) sections.push(currentSection);
+        currentSection = {
+          title: headerMatch[1].trim(),
+          maxPoints: parseInt(headerMatch[2], 10),
+          criteria: []
+        };
+        return;
+      }
+      
+      // Regex dos critérios mais robusto para evitar a falha da "nota zero"
+      const criteriaRegex = /- (.*?)\s*\(.*?\):\s*(-?\d+)\s*(?:\((.*?)\))?/i;
+      const criteriaMatch = line.match(criteriaRegex);
 
-    return { score: finalScore, evaluationText: text };
+      if (criteriaMatch && currentSection) {
+        currentSection.criteria.push({
+          text: criteriaMatch[1].trim(),
+          // Não precisamos mais capturar o maxPoints daqui, focamos na nota atribuída.
+          awardedPoints: parseInt(criteriaMatch[2], 10), // A nota atribuída agora é o grupo 2
+          justification: (criteriaMatch[3] || '').trim(), // A justificação agora é o grupo 3
+        });
+        return;
+      }
+    });
+
+    if (currentSection) sections.push(currentSection);
+
+    if (sections.length > 0) {
+        const finalScore = sections.reduce((total, section) => {
+          return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+        }, 0);
+        
+        // Retorna a estrutura completa com a nota calculada corretamente.
+        return { sections, summary, finalScore };
+    }
+    
+    // Se nenhuma seção for encontrada, retorna falha.
+    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1 };
 
   } catch (error) {
     console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
-    return { score: -1, evaluationText: text };
+    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1 };
   }
 };
 
@@ -86,16 +120,15 @@ const evaluateMeetingWithGemini = async (meeting) => {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
     }
     try {
+        // 👇 ALTERAÇÃO 1: PROMPT SEM A INSTRUÇÃO DE SOMA PARA A IA 👇
         const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
 
 **TAREFA:**
 
 1.  Para CADA UM dos subcritérios listados abaixo, atribua uma pontuação.
 2.  A pontuação de cada subcritério deve ser o valor máximo indicado se o critério foi totalmente cumprido, ou 0 se não foi cumprido ou se a informação não está na transcrição.
-3.  Liste la pontuação de cada subcritério de forma explícita.
-4.  Some todas as pontuações para calcular o Score Final.
-5.  Apresente um resumo da sua análise.
-6.  No final de TUDO, adicione a linha no formato exato: 'FINAL_SCORE: <seu score final aqui>'.
+3.  Liste a pontuação de cada subcritério de forma explícita no formato "- [Critério] (X pontos): Y".
+4.  Apresente um resumo da sua análise ao final.
 
 **CRITÉRIOS DE AVALIAÇÃO:**
 
@@ -130,11 +163,9 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
         
-        // 👇 ALTERAÇÃO AQUI: Usando a nova função que retorna 'score' 👇
-        const { score } = parseEvaluationText(responseText);
+        const { finalScore } = parseEvaluationText(responseText); // Usando a nova função robusta
         
-        // Retornamos o score calculado e o texto original da IA.
-        return { score, evaluationText: responseText };
+        return { score: finalScore, evaluationText: responseText };
 
     } catch (err) {
         console.error(`Erro ao avaliar meeting ${meeting.session_id}:`, err);
