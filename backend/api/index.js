@@ -12,6 +12,7 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
+
 const allowedOrigins = [
     'http://localhost:5173',
     process.env.FRONTEND_URL
@@ -41,31 +42,28 @@ const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-// 👇 ALTERAÇÃO 2: LÓGICA DE PARSE MELHORADA E SEMPRE ATIVA 👇
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
     return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
   }
   
   try {
-    // REMOVEMOS o bloco que procurava por "FINAL_SCORE:".
-    // Agora, o cálculo será SEMPRE feito pela soma dos critérios.
-
-    console.log("Calculando a pontuação a partir da soma dos critérios...");
+    console.log("Iniciando parse da avaliação. Calculando pontuação a partir da soma dos critérios...");
 
     const lines = text.split('\n').filter(line => line.trim() !== '');
     const sections = [];
     let currentSection = null;
     let summary = '';
     
-    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i; // Adicionado 'i' para ser case-insensitive
+    // Regex para extrair o resumo, ignorando maiúsculas/minúsculas
+    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*)/i;
     const summaryMatch = text.match(summaryRegex);
     if (summaryMatch) {
       summary = summaryMatch[1].trim();
     }
 
     lines.forEach(line => {
-      // Regex um pouco mais flexível para o cabeçalho
+      // Regex para o cabeçalho da seção (ex: **Progresso do Aluno (Peso Total: 50 pontos)**)
       const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+)\s*pontos?\)\*\*/i;
       const headerMatch = line.match(sectionHeaderRegex);
       if (headerMatch) {
@@ -75,21 +73,21 @@ const parseEvaluationText = (text) => {
           maxPoints: parseInt(headerMatch[2], 10),
           criteria: []
         };
-        return;
+        return; // Pula para a próxima linha
       }
       
-      // Regex dos critérios mais robusto para evitar a falha da "nota zero"
-      const criteriaRegex = /- (.*?)\s*\(.*?\):\s*(-?\d+)\s*(?:\((.*?)\))?/i;
+      // Regex dos critérios corrigido e robusto para lidar com justificativas entre parênteses
+      const criteriaRegex = /-\s*(.*?)\s*\(([^)]*)\):\s*(-?\d+)\s*(?:\((.*)\))?/i;
       const criteriaMatch = line.match(criteriaRegex);
 
       if (criteriaMatch && currentSection) {
         currentSection.criteria.push({
           text: criteriaMatch[1].trim(),
-          // Não precisamos mais capturar o maxPoints daqui, focamos na nota atribuída.
-          awardedPoints: parseInt(criteriaMatch[2], 10), // A nota atribuída agora é o grupo 2
-          justification: (criteriaMatch[3] || '').trim(), // A justificação agora é o grupo 3
+          // O grupo de captura da pontuação e justificativa mudou com o novo Regex:
+          awardedPoints: parseInt(criteriaMatch[3], 10), // A pontuação agora está no 3º grupo
+          justification: (criteriaMatch[4] || '').trim(),   // A justificativa agora está no 4º grupo
         });
-        return;
+        return; // Pula para a próxima linha
       }
     });
 
@@ -100,16 +98,16 @@ const parseEvaluationText = (text) => {
           return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
         }, 0);
         
-        // Retorna a estrutura completa com a nota calculada corretamente.
+        console.log(`Parse bem-sucedido. Nota final calculada: ${finalScore}`);
         return { sections, summary, finalScore };
     }
     
-    // Se nenhuma seção for encontrada, retorna falha.
-    return { sections: [], summary: 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1 };
+    console.warn("AVISO: Nenhuma seção ou critério foi encontrado no formato esperado. A avaliação falhou.");
+    return { sections: [], summary: summary || 'Falha ao processar a avaliação (formato irreconhecível).', finalScore: -1 };
 
   } catch (error) {
     console.error("Falha catastrófica ao parsear o texto de avaliação:", error);
-    return { sections: [], summary: 'Falha ao processar a avaliação.', finalScore: -1 };
+    return { sections: [], summary: 'Erro interno ao processar a avaliação.', finalScore: -1 };
   }
 };
 
@@ -120,7 +118,6 @@ const evaluateMeetingWithGemini = async (meeting) => {
         return { score: 0, evaluationText: 'Não realizada (resumo indicou dados de reunião limitados).' };
     }
     try {
-        // 👇 ALTERAÇÃO 1: PROMPT SEM A INSTRUÇÃO DE SOMA PARA A IA 👇
         const prompt = `Analise a transcrição da reunião de monitoria. Sua análise e pontuação devem se basear estritamente nos diálogos e eventos descritos na transcrição.
 
 **TAREFA:**
@@ -163,7 +160,7 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
         
-        const { finalScore } = parseEvaluationText(responseText); // Usando a nova função robusta
+        const { finalScore } = parseEvaluationText(responseText);
         
         return { score: finalScore, evaluationText: responseText };
 
@@ -277,7 +274,7 @@ app.post('/api/forgot-password', async (req, res) => {
                 pass: process.env.EMAIL_PASS,
             },
         });
-        
+
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
