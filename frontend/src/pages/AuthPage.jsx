@@ -30,7 +30,7 @@ const monitorNames = [
     "Lucas Fernandes Garcia",
     "Pedro Resende",
     "Talita Linhares",
-    "Gustavo Felippe",
+    "Gustavo Felippe Barbosa",
     "Ryan Cruz",
 ];
 
