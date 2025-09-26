@@ -13,10 +13,7 @@ const app = express();
 app.use(express.json());
 
 
-// 👇 ALTERAÇÃO 1: CONFIGURAÇÃO DE CORS 👇
-// Adicionamos as URLs que podem acessar sua API.
-// A de localhost é para seu ambiente de desenvolvimento.
-// A outra é um placeholder para a URL do seu frontend quando ele estiver no ar.
+
 const allowedOrigins = [
     'http://localhost:5173',
     process.env.FRONTEND_URL // Vamos criar essa variável de ambiente na Vercel
@@ -43,7 +40,7 @@ const pool = new Pool({
 
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
