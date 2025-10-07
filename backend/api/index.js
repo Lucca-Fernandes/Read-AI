@@ -246,7 +246,7 @@ app.post('/api/login', async (req, res) => {
         if (!isMatch) {
             return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
-        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; // Token expira em 8 horas
+        const payload = { id: user.id, name: user.name, email: user.email, role: user.role, exp: Math.floor(Date.now() / 1000) + (60 * 60 * 8) }; 
         const token = jwt.sign(payload, process.env.JWT_SECRET);
         res.json({ token, user: payload });
     } catch (err) {

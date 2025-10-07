@@ -30,230 +30,158 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 import EvaluationDetails from './EvaluationDetails';
 
+// FUNÇÃO ATUALIZADA
 const parseEvaluationText = (text) => {
-  if (!text || typeof text !== 'string') {
-    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
-  }
+    if (!text || typeof text !== 'string') {
+        return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
+    }
 
-  try {
-    const lines = text.split('\n').filter(line => line.trim() !== '');
+    // Normaliza o texto removendo múltiplos asteriscos e espaços extras em cada linha
+    const lines = text.split('\n').map(line => line.trim().replace(/\*+/g, '')).filter(Boolean);
+
     const sections = [];
     let currentSection = null;
     let summary = '';
+    let finalScore = 0;
 
-    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*?)(?=FINAL_SCORE:|$)/;
-    const summaryMatch = text.match(summaryRegex);
-    if (summaryMatch) {
-      summary = summaryMatch[1].trim();
+    // Expressões Regulares mais flexíveis para capturar os dados
+    const sectionHeaderRegex = /^##\s*(.*?)\s*(?:\(\s*\d+\s*\/\s*\d+\s*\))?$/;
+    const criterionRegex = /^- (.*?)\s*(?:\||–|-)\s*(-?\d+)\s*\/\s*(\d+)\s*(?:(?:\||–|-)\s*(?:Justificativa:)?\s*(.*))?/;
+    const summaryRegex = /^Resumo da Análise:\s*(.*)/i;
+    const finalScoreRegex = /^Nota Final:\s*(\d+)\s*\/\s*100/i;
+
+    for (const line of lines) {
+        let match;
+
+        if ((match = line.match(finalScoreRegex))) {
+            finalScore = parseInt(match[1], 10);
+        } else if ((match = line.match(summaryRegex))) {
+            summary = match[1].trim();
+        } else if ((match = line.match(sectionHeaderRegex))) {
+            if (currentSection) sections.push(currentSection);
+            currentSection = { title: match[1].trim(), criteria: [] };
+        } else if (currentSection && (match = line.match(criterionRegex))) {
+            currentSection.criteria.push({
+                text: match[1].trim(),
+                awardedPoints: match[2].trim(),
+                maxPoints: match[3].trim(),
+                justification: match[4] ? match[4].trim() : '',
+            });
+        }
     }
-
-    lines.forEach(line => {
-      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
-      const headerMatch = line.match(sectionHeaderRegex);
-      if (headerMatch) {
-        if (currentSection) sections.push(currentSection);
-        currentSection = { 
-          title: headerMatch[1].trim(), 
-          maxPoints: parseInt(headerMatch[2], 10), 
-          criteria: [] 
-        };
-        return;
-      }
-      
-      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
-      const criteriaMatch = line.match(criteriaRegex);
-      if (criteriaMatch && currentSection) {
-        currentSection.criteria.push({
-          text: criteriaMatch[1].trim(),
-          maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
-          awardedPoints: parseInt(criteriaMatch[3], 10),
-          justification: (criteriaMatch[4] || '').trim(),
-        });
-        return;
-      }
-
-      const reducerRegex = /- (Uso de linguagem informal.*?)\s*\(-(\d+) pontos se sim, 0 se não\):\s*(-?\d+)/;
-      const reducerMatch = line.match(reducerRegex);
-      if (reducerMatch) {
-        const reducerSection = {
-          title: "Redutor de Linguagem",
-          maxPoints: -parseInt(reducerMatch[2], 10),
-          isReducer: true,
-          criteria: [{
-            text: reducerMatch[1].trim(),
-            maxPoints: -parseInt(reducerMatch[2], 10),
-            awardedPoints: parseInt(reducerMatch[3], 10),
-            justification: ""
-          }]
-        };
-        sections.push(reducerSection);
-      }
-    });
 
     if (currentSection) sections.push(currentSection);
 
-    const finalScore = sections.reduce((total, section) => {
-      return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
-    }, 0);
+    // Se, após tudo, nada for encontrado, pode ser uma mensagem de "não realizada"
+    if (sections.length === 0 && !summary && finalScore === 0) {
+        if (text.toLowerCase().includes("não foi realizada")) {
+            return { sections: [], summary: text, finalScore: 0 };
+        }
+        // Fallback genérico se o formato for totalmente desconhecido
+        return { sections: [], summary: 'O texto da avaliação não pôde ser analisado (formato irreconhecível).', finalScore: 0 };
+    }
 
     return { sections, summary, finalScore };
-  } catch (error) {
-    console.error("Falha ao parsear o texto de avaliação:", error);
-    const fallbackScores = {
-      week: text.match(/Perguntou sobre a semana do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      content: text.match(/Perguntou sobre o conteúdo estudado\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      exercises: text.match(/Perguntou sobre os exercícios\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      organization: text.match(/Demonstrou boa condução e organização\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      extraSupport: text.match(/Ofereceu apoio extra\s*\(dicas, recursos\)\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      goalFeedback: text.match(/Feedback sobre a meta\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
-      languageReducer: text.match(/Uso de linguagem informal ou inadequada\?\s*[:\-]?\s*(-?\d+)/i)?.[1] || 0,
-    };
-    const fallbackFinalScore = Object.values(fallbackScores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
-    return { sections: [], summary: 'Falha ao processar a avaliação. Usando soma calculada como fallback.', finalScore: fallbackFinalScore, rawText: text };
-  }
+};
+
+const getScoreColor = (score) => {
+    if (score === 0) return 'default';
+    if (score >= 80) return 'success';
+    if (score > 50) return 'primary';
+    return 'error';
 };
 
 const MeetingCard = ({ meeting }) => {
     const [expanded, setExpanded] = useState(false);
     const [modalOpen, setModalOpen] = useState(false);
 
-    const { finalScore } = parseEvaluationText(meeting.evaluationText);
+    const { finalScore, summary } = parseEvaluationText(meeting.evaluation_text);
+    const scoreColor = getScoreColor(finalScore);
 
-    const getStatusColor = (score) => {
-        if (score === -1) return 'default'; // Cinza para falha
-        if (score === 0) return 'error'; // Vermelho para não realizada
-        if (score >= 80) return 'success'; // Verde para nota alta
-        if (score > 0 && score <= 50) return 'warning'; // Amarelo para nota baixa
-        return 'primary'; // Azul para notas medianas
-    };
+    const handleExpandClick = () => setExpanded(!expanded);
+    const handleOpenModal = () => setModalOpen(true);
+    const handleCloseModal = () => setModalOpen(false);
 
-    const getScoreLabel = (score) => {
-        if (score === null) return 'Avaliando...';
-        if (score === -1) return 'Falha na Avaliação';
-        if (score === 0) return 'Não Realizada';
-        return `Nota: ${score}`;
-    };
-
-    const handleScoreClick = () => {
-        if (meeting && finalScore !== null) {
-            setModalOpen(true);
-        }
-    };
-
-    const handleCloseModal = () => {
-        setModalOpen(false);
-    };
+    const isNotRealized = summary.toLowerCase().includes("não foi realizada") || finalScore === 0;
 
     return (
-        <Tooltip title={`ID da Sessão: ${meeting.session_id}`}>
+        <Tooltip title={isNotRealized ? "Clique para mais detalhes" : "Clique para ver a avaliação detalhada"} placement="top" arrow>
             <Card
+                elevation={3}
                 sx={{
-                    mb: 2,
-                    borderLeft: `6px solid`,
-                    borderLeftColor: `${getStatusColor(finalScore)}.main`,
-                    transition: 'box-shadow 0.3s ease-in-out, transform 0.2s ease-in-out',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    height: '100%',
+                    borderRadius: 2,
+                    transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
                     '&:hover': {
-                        boxShadow: 6,
                         transform: 'translateY(-4px)',
+                        boxShadow: 6,
                     },
+                    cursor: 'pointer',
                 }}
             >
-                <CardContent>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                        <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 'bold' }}>
+                <CardContent sx={{ flexGrow: 1 }} onClick={handleOpenModal}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', mb: 1, flexGrow: 1, pr: 1 }}>
                             {meeting.meeting_title}
                         </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Chip
-                                label={getScoreLabel(finalScore)}
-                                color={getStatusColor(finalScore)}
-                                icon={finalScore === -1 ? <ErrorOutlineIcon /> : null}
-                                sx={{ fontWeight: 'bold', cursor: finalScore !== null ? 'pointer' : 'default' }}
-                                onClick={handleScoreClick}
-                            />
-                            <IconButton onClick={() => setExpanded(!expanded)} sx={{ color: 'secondary.main' }}>
-                                {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                            </IconButton>
+                        <Chip
+                            label={isNotRealized ? "Não Realizada" : `Nota: ${finalScore}`}
+                            color={isNotRealized ? 'default' : scoreColor}
+                            variant="filled"
+                            icon={isNotRealized ? <ErrorOutlineIcon /> : null}
+                            sx={{ fontWeight: 'bold' }}
+                        />
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', mb: 1.5 }}>
+                        <PersonIcon sx={{ mr: 1, fontSize: '1.2rem' }} />
+                        <Typography variant="body2">{meeting.owner_name}</Typography>
+                    </Box>
+                    <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            minHeight: '40px',
+                        }}
+                    >
+                        {summary}
+                    </Typography>
+                </CardContent>
+
+                <Divider />
+
+                <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary' }}>
+                            <CalendarTodayIcon sx={{ mr: 1, fontSize: '1.2rem' }} />
+                            <Typography variant="caption">
+                                {new Date(meeting.start_time).toLocaleDateString('pt-BR')}
+                            </Typography>
                         </Box>
-                    </Box>
-
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                        <PersonIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
-                        <Typography><strong>Monitor:</strong> {meeting.owner_name}</Typography>
-                    </Box>
-
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-                        <DescriptionIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
-                        <Typography>
-                            <strong>Resumo:</strong> {meeting.summary}
-                        </Typography>
+                        <IconButton
+                            onClick={handleExpandClick}
+                            aria-expanded={expanded}
+                            aria-label="show more"
+                        >
+                            {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                        </IconButton>
                     </Box>
 
                     <Collapse in={expanded} timeout="auto" unmountOnExit>
-                        <Divider sx={{ my: 2, borderColor: 'primary.light' }} />
-
-                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-                            <TopicIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
-                            <Typography><strong>Tópicos:</strong> {(meeting.topics || []).join(', ') || 'Nenhum'}</Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <SentimentSatisfiedIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
-                            <Typography><strong>Sentimento:</strong> {meeting.sentiments}</Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-                            <DescriptionIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
-                            <Typography>
-                                <strong>Capítulos:</strong>{' '}
-                                {(meeting.chapters || []).length > 0
-                                    ? (meeting.chapters || []).map(c => `${c.title}: ${c.description}`).join(' | ')
-                                    : 'Nenhum'}
+                        <Box sx={{ mt: 2 }}>
+                            <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                                <GroupIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                                <strong>Participantes:</strong>&nbsp;{meeting.participants?.length || 0}
                             </Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-                            <MicIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
-                            <Typography>
-                                <strong>Transcrição:</strong>{' '}
-                                {meeting.transcript ? meeting.transcript.substring(0, 100) + '...' : 'Nenhuma'}
-                            </Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-                            <GroupIcon sx={{ color: 'text.secondary', fontSize: '1.2rem', mt: '4px' }} />
-                            <Typography>
-                                <strong>Participantes:</strong>{' '}
-                                {(meeting.participants || []).length > 0
-                                    ? (meeting.participants || []).map(p => `${p.name} (${p.email})`).join(', ')
-                                    : 'Nenhum'}
-                            </Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <CalendarTodayIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
-                            <Typography><strong>Data:</strong> {new Date(meeting.start_time).toLocaleString()}</Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <LinkIcon sx={{ color: 'text.secondary', fontSize: '1.2rem' }} />
-                            <Typography>
-                                <strong>Link:</strong>{' '}
-                                <a
-                                    href={meeting.report_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ color: '#0284c7', textDecoration: 'none' }}
-                                    onMouseEnter={(e) => (e.target.style.textDecoration = 'underline')}
-                                    onMouseLeave={(e) => (e.target.style.textDecoration = 'none')}
-                                >
+                            <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                                <DescriptionIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                                <a href={meeting.report_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                                     Ver relatório
                                 </a>
                             </Typography>
@@ -274,7 +202,7 @@ const MeetingCard = ({ meeting }) => {
                     </DialogTitle>
                     
                     <DialogContent dividers sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
-                        <EvaluationDetails evaluationText={meeting.evaluationText} />
+                        <EvaluationDetails evaluationText={meeting.evaluation_text} />
                     </DialogContent>
                     
                     <DialogActions>
