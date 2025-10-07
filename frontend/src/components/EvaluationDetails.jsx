@@ -35,29 +35,22 @@ const StatusIcon = ({ status }) => {
   return icons[status] || <InfoIcon color="disabled" />;
 };
 
-// FUNÇÃO ATUALIZADA
+// FUNÇÃO ATUALIZADA (CORRETA)
 const parseEvaluationText = (text) => {
     if (!text || typeof text !== 'string') {
         return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
     }
-
-    // Normaliza o texto removendo múltiplos asteriscos e espaços extras em cada linha
     const lines = text.split('\n').map(line => line.trim().replace(/\*+/g, '')).filter(Boolean);
-
     const sections = [];
     let currentSection = null;
     let summary = '';
     let finalScore = 0;
-
-    // Expressões Regulares mais flexíveis para capturar os dados
     const sectionHeaderRegex = /^##\s*(.*?)\s*(?:\(\s*\d+\s*\/\s*\d+\s*\))?$/;
     const criterionRegex = /^- (.*?)\s*(?:\||–|-)\s*(-?\d+)\s*\/\s*(\d+)\s*(?:(?:\||–|-)\s*(?:Justificativa:)?\s*(.*))?/;
     const summaryRegex = /^Resumo da Análise:\s*(.*)/i;
     const finalScoreRegex = /^Nota Final:\s*(\d+)\s*\/\s*100/i;
-
     for (const line of lines) {
         let match;
-
         if ((match = line.match(finalScoreRegex))) {
             finalScore = parseInt(match[1], 10);
         } else if ((match = line.match(summaryRegex))) {
@@ -74,18 +67,13 @@ const parseEvaluationText = (text) => {
             });
         }
     }
-
     if (currentSection) sections.push(currentSection);
-
-    // Se, após tudo, nada for encontrado, pode ser uma mensagem de "não realizada"
     if (sections.length === 0 && !summary && finalScore === 0) {
         if (text.toLowerCase().includes("não foi realizada")) {
             return { sections: [], summary: text, finalScore: 0 };
         }
-        // Fallback genérico se o formato for totalmente desconhecido
         return { sections: [], summary: 'O texto da avaliação não pôde ser analisado (formato irreconhecível).', finalScore: 0 };
     }
-
     return { sections, summary, finalScore };
 };
 
@@ -112,21 +100,36 @@ const EvaluationDetails = ({ evaluationText }) => {
 
   return (
     <Box>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12}>
-          <Paper elevation={2} sx={{ p: 2, textAlign: 'center' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, mb: 1 }}>
-              <ScoreboardIcon color={getScoreColor(finalScore)} />
-              <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Nota Final</Typography>
-            </Box>
-            <Typography variant="h3" color={getScoreColor(finalScore) + '.main'} sx={{ fontWeight: 'bold' }}>
-              {finalScore}
-              <Typography variant="h5" component="span" color="text.secondary"> / 100</Typography>
-            </Typography>
-          </Paper>
+      {/* LAYOUT ORIGINAL RESTAURADO */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        <Grid item xs={12} md={7}>
+            <Paper elevation={2} sx={{ p: 2, height: '100%' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <TextSnippetIcon color="primary" />
+                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                        Resumo da Análise
+                    </Typography>
+                </Box>
+                <Typography variant="body2" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
+                    {summary || 'Nenhum resumo fornecido.'}
+                </Typography>
+            </Paper>
+        </Grid>
+        <Grid item xs={12} md={5}>
+            <Paper elevation={2} sx={{ p: 2, textAlign: 'center', height: '100%' }}>
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <ScoreboardIcon color={getScoreColor(finalScore)} />
+                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Nota Final</Typography>
+                </Box>
+                <Typography variant="h3" color={getScoreColor(finalScore) + '.main'} sx={{ fontWeight: 'bold' }}>
+                    {finalScore}
+                    <Typography variant="h5" component="span" color="text.secondary"> / 100</Typography>
+                </Typography>
+            </Paper>
         </Grid>
       </Grid>
-      
+
+      {/* DETALHAMENTO DOS CRITÉRIOS (Sem alteração) */}
       {sections.map((section, index) => {
         const sectionScore = section.criteria.reduce((acc, item) => acc + Number(item.awardedPoints), 0);
         const maxScore = section.criteria.reduce((acc, item) => acc + Number(item.maxPoints), 0);
@@ -170,18 +173,6 @@ const EvaluationDetails = ({ evaluationText }) => {
           </Accordion>
         );
       })}
-
-      <Paper elevation={2} sx={{ p: 2, mt: 3 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-          <TextSnippetIcon color="primary" />
-          <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-            Resumo da Análise
-          </Typography>
-        </Box>
-        <Typography variant="body2" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
-          {summary || 'Nenhum resumo fornecido.'}
-        </Typography>
-      </Paper>
     </Box>
   );
 };
