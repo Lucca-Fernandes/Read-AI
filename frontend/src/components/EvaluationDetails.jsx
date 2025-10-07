@@ -35,180 +35,150 @@ const StatusIcon = ({ status }) => {
   return icons[status] || <InfoIcon color="disabled" />;
 };
 
-// =======================================================================
-// VERSÃO DEFINITIVA DA FUNÇÃO parseEvaluationText
-// =======================================================================
 const parseEvaluationText = (text) => {
-    if (!text || typeof text !== 'string') {
-        return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
-    }
+  if (!text || typeof text !== 'string') {
+    return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
+  }
 
-    let finalScore = 0;
+  try {
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const sections = [];
+    let currentSection = null;
     let summary = '';
-    let sections = [];
-    let detailsText = text;
 
-    // 1. Extrai a Nota Final (procura por múltiplos padrões em ordem de confiabilidade)
-    const scoreMatchers = [
-        /^FINAL_SCORE:\s*(\d+)/m,
-        /Score Final:\s*.*?=\s*\**(\d+)\**/m,
-        /Score Final Total:\s*.*?=\s*\**(\d+)\**/m,
-        /^\*\*Score Final:\*\*\s*(\d+)\s*\/\s*100/m,
-        /^\*\*Score Final:\*\*\s*(\d+)/m
-    ];
-    for (const matcher of scoreMatchers) {
-        const scoreMatch = text.match(matcher);
-        if (scoreMatch) {
-            finalScore = parseInt(scoreMatch[1], 10);
-            break;
-        }
+    const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*?)(?=FINAL_SCORE:|$)/;
+    const summaryMatch = text.match(summaryRegex);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim();
     }
 
-    // 2. Extrai o Resumo (procura por múltiplos padrões de cabeçalho)
-    const summaryHeaderMatchers = [
-        /\n---\s*\*\*Resumo da Análise:\*\*/m,
-        /\n\*\*Resumo da Análise:\*\*/m,
-        /^\*\*Resumo da Análise:\*\*/m,
-        /^Resumo da Análise:/m
-    ];
-    for (const matcher of summaryHeaderMatchers) {
-        const summarySplit = text.split(matcher);
-        if (summarySplit.length > 1) {
-            summary = summarySplit[1].split(/---|\*\*Score Final|FINAL_SCORE/m)[0].trim();
-            detailsText = summarySplit[0]; // O que veio antes do resumo são os detalhes
-            break;
-        }
-    }
-
-    // 3. Processa os detalhes
-    if (detailsText && detailsText.trim()) {
-        const lines = detailsText.split('\n').map(line => line.trim());
-        let currentSection = null;
-        let lastCriterion = null;
-
-        const sectionRegex = /^\*\*\s*\d+\.\s*(.*?)\s*\(Peso Total: \d+ pontos\)\*\*/;
-        const criterionRegex = /^\s*-\s*(.*?)\s*\((\d+)\s*pontos\):\s*(-?\d+)/;
-        const evidenceRegex = /^(?:- Evidência:|\*Justificativa:|- Justificativa:)\s*(.*)/i;
-
-        for (const line of lines) {
-            const sectionMatch = line.match(sectionRegex);
-            if (sectionMatch) {
-                const newSection = { title: sectionMatch[1].trim(), criteria: [] };
-                sections.push(newSection);
-                currentSection = newSection;
-                lastCriterion = null;
-                continue;
-            }
-
-            const criterionMatch = line.match(criterionRegex);
-            if (criterionMatch) {
-                if (!currentSection) {
-                    currentSection = { title: "Critérios de Avaliação", criteria: [] };
-                    sections.push(currentSection);
-                }
-                const newCriterion = {
-                    text: criterionMatch[1].trim(),
-                    awardedPoints: criterionMatch[3].trim(),
-                    maxPoints: criterionMatch[2].trim(),
-                    justification: '',
-                };
-                currentSection.criteria.push(newCriterion);
-                lastCriterion = newCriterion;
-                continue;
-            }
-
-            const evidenceMatch = line.match(evidenceRegex);
-            if (evidenceMatch && lastCriterion) {
-                lastCriterion.justification = evidenceMatch[1].trim();
-            }
-        }
-        sections = sections.filter(s => s.criteria.length > 0);
-    }
-    
-    // 4. Lógica final de retorno
-    if (sections.length === 0 && !summary) {
-        return { 
-            sections: [], 
-            summary: `(Formato não reconhecido):\n\n${text}`, 
-            finalScore: finalScore 
+    lines.forEach(line => {
+      const sectionHeaderRegex = /\*\*(.*?)\(Peso Total: (-?\d+) pontos\)\*\*/;
+      const headerMatch = line.match(sectionHeaderRegex);
+      if (headerMatch) {
+        if (currentSection) sections.push(currentSection);
+        currentSection = { 
+          title: headerMatch[1].trim(), 
+          maxPoints: parseInt(headerMatch[2], 10), 
+          criteria: [] 
         };
-    }
+        return;
+      }
+      
+      const criteriaRegex = /- (.*?)\s*\((\d+|Máximo: -?\d+) pontos\):\s*(-?\d+)\s*(?:\((.*?)\))?/;
+      const criteriaMatch = line.match(criteriaRegex);
+      if (criteriaMatch && currentSection) {
+        currentSection.criteria.push({
+          text: criteriaMatch[1].trim(),
+          maxPoints: parseInt(String(criteriaMatch[2]).replace('Máximo: ', ''), 10),
+          awardedPoints: parseInt(criteriaMatch[3], 10),
+          justification: (criteriaMatch[4] || '').trim(),
+        });
+        return;
+      }
 
-    return { sections, summary: summary || "Nenhum resumo encontrado.", finalScore };
-};
+      const reducerRegex = /- (Uso de linguagem informal.*?)\s*\(-(\d+) pontos se sim, 0 se não\):\s*(-?\d+)/;
+      const reducerMatch = line.match(reducerRegex);
+      if (reducerMatch) {
+        const reducerSection = {
+          title: "Redutor de Linguagem",
+          maxPoints: -parseInt(reducerMatch[2], 10),
+          isReducer: true,
+          criteria: [{
+            text: reducerMatch[1].trim(),
+            maxPoints: -parseInt(reducerMatch[2], 10),
+            awardedPoints: parseInt(reducerMatch[3], 10),
+            justification: ""
+          }]
+        };
+        sections.push(reducerSection);
+      }
+    });
 
-const getScoreColor = (score) => {
-  if (score >= 80) return 'success';
-  if (score > 50) return 'primary';
-  return 'error';
+    if (currentSection) sections.push(currentSection);
+
+    // Calculate finalScore from summed awardedPoints
+    const finalScore = sections.reduce((total, section) => {
+      return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
+    }, 0);
+
+    return { sections, summary, finalScore };
+  } catch (error) {
+    console.error("Falha ao parsear o texto de avaliação:", error);
+    // Fallback: Sum scores using regex similar to Dashboard
+    const fallbackScores = {
+      week: text.match(/Perguntou sobre a semana do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      prevGoal: text.match(/Verificou a conclusão da meta anterior\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      newGoal: text.match(/Estipulou uma nova meta para o aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      content: text.match(/Perguntou sobre o conteúdo estudado\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      exercises: text.match(/Perguntou sobre os exercícios\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      doubts: text.match(/Esclareceu todas as dúvidas corretamente\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      organization: text.match(/Demonstrou boa condução e organização\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      motivation: text.match(/Incentivou o aluno a se manter no curso\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      goalsImportance: text.match(/Reforçou a importância das metas e encontros\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      extraSupport: text.match(/Ofereceu apoio extra\s*\(dicas, recursos\)\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      risk: text.match(/Conduziu corretamente casos de desmotivação ou risco\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      achievements: text.match(/Reconheceu conquistas e avanços do aluno\?\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      goalFeedback: text.match(/Feedback sobre a meta\s*[:\-]?\s*(\d+)/i)?.[1] || 0,
+      languageReducer: text.match(/Uso de linguagem informal ou inadequada\?\s*[:\-]?\s*(-?\d+)/i)?.[1] || 0,
+    };
+    const fallbackFinalScore = Object.values(fallbackScores).reduce((sum, score) => sum + parseInt(score || 0, 10), 0);
+    return { sections: [], summary: 'Falha ao processar a avaliação. Usando soma calculada como fallback.', finalScore: fallbackFinalScore, rawText: text };
+  }
 };
 
 const EvaluationDetails = ({ evaluationText }) => {
-  const { sections, summary, finalScore } = useMemo(() => parseEvaluationText(evaluationText), [evaluationText]);
+  const { sections, summary, finalScore, rawText } = useMemo(
+    () => parseEvaluationText(evaluationText), 
+    [evaluationText]
+  );
 
-  if (sections.length === 0) {
-    return (
-      <Paper elevation={2} sx={{ p: 3, textAlign: 'center' }}>
-        <InfoIcon color="action" sx={{ fontSize: 40, mb: 1 }} />
-        <Typography variant="h6">Informação da Reunião</Typography>
-        <Typography sx={{ mt: 1, whiteSpace: 'pre-wrap', fontFamily: 'monospace', bgcolor: 'grey.100', p: 1, borderRadius: 1 }}>
-          {summary || 'Não foi possível carregar os detalhes desta avaliação.'}
-        </Typography>
-      </Paper>
-    );
+  if (rawText) {
+    return <Typography sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>{rawText}</Typography>;
   }
 
   return (
     <Box>
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={7}>
-            <Paper elevation={2} sx={{ p: 2, height: '100%' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <TextSnippetIcon color="primary" />
-                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-                        Resumo da Análise
-                    </Typography>
-                </Box>
-                <Typography variant="body2" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
-                    {summary || 'Nenhum resumo fornecido.'}
-                </Typography>
-            </Paper>
-        </Grid>
-        <Grid item xs={12} md={5}>
-            <Paper elevation={2} sx={{ p: 2, textAlign: 'center', height: '100%' }}>
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <ScoreboardIcon color={getScoreColor(finalScore)} />
-                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Nota Final</Typography>
-                </Box>
-                <Typography variant="h3" color={getScoreColor(finalScore) + '.main'} sx={{ fontWeight: 'bold' }}>
-                    {finalScore}
-                    <Typography variant="h5" component="span" color="text.secondary"> / 100</Typography>
-                </Typography>
-            </Paper>
-        </Grid>
-      </Grid>
+      <Paper elevation={2} sx={{ p: 2, mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(45deg, #e3f2fd 30%, #e8eaf6 90%)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ScoreboardIcon color="primary" sx={{ fontSize: '2rem' }} />
+          <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+            Nota Final
+          </Typography>
+        </Box>
+        <Chip label={finalScore} color="primary" sx={{ fontSize: '1.2rem', fontWeight: 'bold', p: 2 }} />
+      </Paper>
       
       {sections.map((section, index) => {
-        const sectionScore = section.criteria.reduce((acc, item) => acc + Number(item.awardedPoints), 0);
-        const maxScore = section.criteria.reduce((acc, item) => acc + Number(item.maxPoints), 0);
-        
+        const totalAwarded = section.criteria.reduce((acc, curr) => acc + curr.awardedPoints, 0);
+        const isReducer = section.isReducer;
+
         return (
           <Accordion key={index} defaultExpanded>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography sx={{ flexGrow: 1, fontWeight: 'bold' }}>
-                {section.title}
-              </Typography>
-              <Chip label={`${sectionScore} / ${maxScore}`} size="small" />
+              <Grid container alignItems="center" spacing={2}>
+                <Grid item xs={12} sm={8}>
+                  <Typography sx={{ fontWeight: 'bold', color: isReducer ? 'error.main' : 'text.primary' }}>
+                    {section.title}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} sm={4} sx={{ display: 'flex', justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}>
+                  <Chip 
+                    label={`Nota: ${totalAwarded} / ${section.maxPoints}`} 
+                    size="small"
+                    color={isReducer ? (totalAwarded < 0 ? 'error' : 'default') : 'primary'}
+                    variant="outlined"
+                  />
+                </Grid>
+              </Grid>
             </AccordionSummary>
-            <AccordionDetails sx={{ bgcolor: 'white' }}>
+            <AccordionDetails sx={{ background: '#fafafa' }}>
               {section.criteria.map((item, itemIndex) => {
-                const status = getScoreStatus(Number(item.awardedPoints), Number(item.maxPoints));
-                const isReducer = Number(item.awardedPoints) < 0;
-
+                const status = getScoreStatus(item.awardedPoints, item.maxPoints);
                 return (
-                  <Box key={itemIndex} sx={{ py: 1.5 }}>
+                  <Box key={itemIndex} sx={{ mb: itemIndex === section.criteria.length - 1 ? 0 : 2 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1, mr: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         {isReducer ? <GppBadIcon color="error" /> : <StatusIcon status={status} />}
                         <Typography variant="body2">{item.text}</Typography>
                       </Box>
@@ -231,6 +201,18 @@ const EvaluationDetails = ({ evaluationText }) => {
           </Accordion>
         );
       })}
+
+      <Paper elevation={2} sx={{ p: 2, mt: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <TextSnippetIcon color="primary" />
+          <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+            Resumo da Análise
+          </Typography>
+        </Box>
+        <Typography variant="body2" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
+          {summary || 'Nenhum resumo fornecido.'}
+        </Typography>
+      </Paper>
     </Box>
   );
 };
