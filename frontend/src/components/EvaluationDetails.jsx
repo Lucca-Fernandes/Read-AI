@@ -35,58 +35,80 @@ const StatusIcon = ({ status }) => {
   return icons[status] || <InfoIcon color="disabled" />;
 };
 
+// =======================================================================
+// NOVA FUNÇÃO parseEvaluationText (CORRIGIDA)
+// =======================================================================
 const parseEvaluationText = (text) => {
-    // =======================================================================
-    // PASSO DE DEPURAÇÃO: A linha abaixo irá imprimir o texto da IA no console
-    // =======================================================================
-    console.log("--- TEXTO ORIGINAL DA IA PARA ANÁLISE ---", text);
-    // =======================================================================
-
     if (!text || typeof text !== 'string') {
         return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
     }
-    const lines = text.split('\n').map(line => line.trim().replace(/\*+/g, '')).filter(Boolean);
+
+    // Procura pela nota final primeiro, é o dado mais confiável
+    const finalScoreMatch = text.match(/^FINAL_SCORE:\s*(\d+)/m) || text.match(/Score Final Total:.*?=\s*(\d+)/);
+    const finalScore = finalScoreMatch ? parseInt(finalScoreMatch[1], 10) : 0;
+
+    // Procura pelo resumo
+    const summaryMatch = text.split(/---\s*\*\*Resumo da Análise:\*\*|^\*\*Resumo da Análise:\*\*/m);
+    let summary = summaryMatch.length > 1 ? summaryMatch[1].split('---')[0].trim() : 'Resumo não encontrado.';
+    
+    // Remove a linha FINAL_SCORE do resumo, se existir
+    summary = summary.replace(/^FINAL_SCORE:\s*\d+/m, '').trim();
+
+    // Se o texto indica que a reunião não foi realizada, retorna imediatamente
+    if (text.toLowerCase().includes("não foi realizada")) {
+      return { sections: [], summary: text, finalScore: 0 };
+    }
+    
     const sections = [];
     let currentSection = null;
-    let summary = '';
-    let finalScore = 0;
-    const sectionHeaderRegex = /^##\s*(.*?)\s*(?:\(\s*\d+\s*\/\s*\d+\s*\))?$/;
-    const criterionRegex = /^- (.*?)\s*(?:\||–|-)\s*(-?\d+)\s*\/\s*(\d+)\s*(?:(?:\||–|-)\s*(?:Justificativa:)?\s*(.*))?/;
-    const summaryRegex = /^Resumo da Análise:\s*(.*)/i;
-    const finalScoreRegex = /^Nota Final:\s*(\d+)\s*\/\s*100/i;
+    let lastCriterion = null;
+
+    const lines = text.split('\n').map(line => line.trim());
+
     for (const line of lines) {
-        let match;
-        if ((match = line.match(finalScoreRegex))) {
-            finalScore = parseInt(match[1], 10);
-        } else if ((match = line.match(summaryRegex))) {
-            summary = match[1].trim();
-        } else if ((match = line.match(sectionHeaderRegex))) {
+        // Tenta identificar um cabeçalho de seção (ex: **1. Progresso do Aluno (Peso Total: 50 pontos)**)
+        const sectionMatch = line.match(/^\*\*\s*\d+\.\s*(.*?)\s*\(Peso Total: (\d+) pontos\)\*\*/);
+        if (sectionMatch) {
             if (currentSection) sections.push(currentSection);
-            currentSection = { title: match[1].trim(), criteria: [] };
-        } else if (currentSection && (match = line.match(criterionRegex))) {
-            currentSection.criteria.push({
-                text: match[1].trim(),
-                awardedPoints: match[2].trim(),
-                maxPoints: match[3].trim(),
-                justification: match[4] ? match[4].trim() : '',
-            });
+            currentSection = { title: sectionMatch[1].trim(), criteria: [] };
+            continue;
+        }
+        
+        // Tenta identificar um critério de avaliação (ex: - Perguntou sobre a semana do aluno? (5 pontos): 5)
+        const criterionMatch = line.match(/^- (.*?)\s*\((\d+) pontos\):\s*(-?\d+)/);
+        if (criterionMatch && currentSection) {
+            const newCriterion = {
+                text: criterionMatch[1].trim(),
+                awardedPoints: criterionMatch[3].trim(),
+                maxPoints: criterionMatch[2].trim(),
+                justification: '',
+            };
+            currentSection.criteria.push(newCriterion);
+            lastCriterion = newCriterion; // Guarda a referência para o último critério
+            continue;
+        }
+
+        // Tenta identificar uma justificativa/evidência e associá-la ao critério anterior
+        const evidenceMatch = line.match(/^(?:- Evidência:|\*Justificativa\*:)\s*(.*)/);
+        if (evidenceMatch && lastCriterion) {
+            lastCriterion.justification = evidenceMatch[1].trim();
         }
     }
+
     if (currentSection) sections.push(currentSection);
 
-    if (sections.length === 0 && !summary && finalScore === 0) {
-        if (text.toLowerCase().includes("não foi realizada")) {
-            return { sections: [], summary: text, finalScore: 0 };
-        }
-        // MELHORIA: Se falhar, exibe o texto original em vez de um erro genérico
-        return {
-            sections: [],
-            summary: `(O formato da avaliação não foi reconhecido. Exibindo texto original da IA):\n\n${text}`,
-            finalScore: 0
+    // Se, após tudo, nada for encontrado, retorna o estado de falha
+    if (sections.length === 0) {
+        return { 
+            sections: [], 
+            summary: `(O formato da avaliação não foi reconhecido. Exibindo texto original da IA):\n\n${text}`, 
+            finalScore: finalScore 
         };
     }
+
     return { sections, summary, finalScore };
 };
+
 
 const getScoreColor = (score) => {
   if (score >= 80) return 'success';
@@ -97,11 +119,11 @@ const getScoreColor = (score) => {
 const EvaluationDetails = ({ evaluationText }) => {
   const { sections, summary, finalScore } = useMemo(() => parseEvaluationText(evaluationText), [evaluationText]);
 
-  if (sections.length === 0 && finalScore === 0) { // Lógica ajustada para exibir o fallback
+  if (sections.length === 0) {
     return (
-      <Paper elevation={2} sx={{ p: 3 }}>
-        <InfoIcon color="action" sx={{ fontSize: 40, mb: 1, display: 'block', margin: '0 auto' }} />
-        <Typography variant="h6" sx={{ textAlign: 'center' }}>Informação da Reunião</Typography>
+      <Paper elevation={2} sx={{ p: 3, textAlign: 'center' }}>
+        <InfoIcon color="action" sx={{ fontSize: 40, mb: 1 }} />
+        <Typography variant="h6">Informação da Reunião</Typography>
         <Typography sx={{ mt: 1, whiteSpace: 'pre-wrap', fontFamily: 'monospace', bgcolor: 'grey.100', p: 1, borderRadius: 1 }}>
           {summary || 'Não foi possível carregar os detalhes desta avaliação.'}
         </Typography>

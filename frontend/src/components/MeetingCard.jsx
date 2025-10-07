@@ -16,13 +16,9 @@ import {
     Button,
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
-import TopicIcon from '@mui/icons-material/Topic';
-import SentimentSatisfiedIcon from '@mui/icons-material/SentimentSatisfied';
 import DescriptionIcon from '@mui/icons-material/Description';
-import MicIcon from '@mui/icons-material/Mic';
 import GroupIcon from '@mui/icons-material/Group';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import LinkIcon from '@mui/icons-material/Link';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import CloseIcon from '@mui/icons-material/Close';
@@ -30,55 +26,75 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 import EvaluationDetails from './EvaluationDetails';
 
-// FUNÇÃO ATUALIZADA
+// =======================================================================
+// NOVA FUNÇÃO parseEvaluationText (CORRIGIDA)
+// =======================================================================
 const parseEvaluationText = (text) => {
     if (!text || typeof text !== 'string') {
         return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
     }
 
-    // Normaliza o texto removendo múltiplos asteriscos e espaços extras em cada linha
-    const lines = text.split('\n').map(line => line.trim().replace(/\*+/g, '')).filter(Boolean);
+    // Procura pela nota final primeiro, é o dado mais confiável
+    const finalScoreMatch = text.match(/^FINAL_SCORE:\s*(\d+)/m) || text.match(/Score Final Total:.*?=\s*(\d+)/);
+    const finalScore = finalScoreMatch ? parseInt(finalScoreMatch[1], 10) : 0;
 
+    // Procura pelo resumo
+    const summaryMatch = text.split(/---\s*\*\*Resumo da Análise:\*\*|^\*\*Resumo da Análise:\*\*/m);
+    let summary = summaryMatch.length > 1 ? summaryMatch[1].split('---')[0].trim() : 'Resumo não encontrado.';
+    
+    // Remove a linha FINAL_SCORE do resumo, se existir
+    summary = summary.replace(/^FINAL_SCORE:\s*\d+/m, '').trim();
+
+    // Se o texto indica que a reunião não foi realizada, retorna imediatamente
+    if (text.toLowerCase().includes("não foi realizada")) {
+      return { sections: [], summary: text, finalScore: 0 };
+    }
+    
     const sections = [];
     let currentSection = null;
-    let summary = '';
-    let finalScore = 0;
+    let lastCriterion = null;
 
-    // Expressões Regulares mais flexíveis para capturar os dados
-    const sectionHeaderRegex = /^##\s*(.*?)\s*(?:\(\s*\d+\s*\/\s*\d+\s*\))?$/;
-    const criterionRegex = /^- (.*?)\s*(?:\||–|-)\s*(-?\d+)\s*\/\s*(\d+)\s*(?:(?:\||–|-)\s*(?:Justificativa:)?\s*(.*))?/;
-    const summaryRegex = /^Resumo da Análise:\s*(.*)/i;
-    const finalScoreRegex = /^Nota Final:\s*(\d+)\s*\/\s*100/i;
+    const lines = text.split('\n').map(line => line.trim());
 
     for (const line of lines) {
-        let match;
-
-        if ((match = line.match(finalScoreRegex))) {
-            finalScore = parseInt(match[1], 10);
-        } else if ((match = line.match(summaryRegex))) {
-            summary = match[1].trim();
-        } else if ((match = line.match(sectionHeaderRegex))) {
+        // Tenta identificar um cabeçalho de seção (ex: **1. Progresso do Aluno (Peso Total: 50 pontos)**)
+        const sectionMatch = line.match(/^\*\*\s*\d+\.\s*(.*?)\s*\(Peso Total: (\d+) pontos\)\*\*/);
+        if (sectionMatch) {
             if (currentSection) sections.push(currentSection);
-            currentSection = { title: match[1].trim(), criteria: [] };
-        } else if (currentSection && (match = line.match(criterionRegex))) {
-            currentSection.criteria.push({
-                text: match[1].trim(),
-                awardedPoints: match[2].trim(),
-                maxPoints: match[3].trim(),
-                justification: match[4] ? match[4].trim() : '',
-            });
+            currentSection = { title: sectionMatch[1].trim(), criteria: [] };
+            continue;
+        }
+        
+        // Tenta identificar um critério de avaliação (ex: - Perguntou sobre a semana do aluno? (5 pontos): 5)
+        const criterionMatch = line.match(/^- (.*?)\s*\((\d+) pontos\):\s*(-?\d+)/);
+        if (criterionMatch && currentSection) {
+            const newCriterion = {
+                text: criterionMatch[1].trim(),
+                awardedPoints: criterionMatch[3].trim(),
+                maxPoints: criterionMatch[2].trim(),
+                justification: '',
+            };
+            currentSection.criteria.push(newCriterion);
+            lastCriterion = newCriterion; // Guarda a referência para o último critério
+            continue;
+        }
+
+        // Tenta identificar uma justificativa/evidência e associá-la ao critério anterior
+        const evidenceMatch = line.match(/^(?:- Evidência:|\*Justificativa\*:)\s*(.*)/);
+        if (evidenceMatch && lastCriterion) {
+            lastCriterion.justification = evidenceMatch[1].trim();
         }
     }
 
     if (currentSection) sections.push(currentSection);
 
-    // Se, após tudo, nada for encontrado, pode ser uma mensagem de "não realizada"
-    if (sections.length === 0 && !summary && finalScore === 0) {
-        if (text.toLowerCase().includes("não foi realizada")) {
-            return { sections: [], summary: text, finalScore: 0 };
-        }
-        // Fallback genérico se o formato for totalmente desconhecido
-        return { sections: [], summary: 'O texto da avaliação não pôde ser analisado (formato irreconhecível).', finalScore: 0 };
+    // Se, após tudo, nada for encontrado, retorna o estado de falha
+    if (sections.length === 0) {
+        return { 
+            sections: [], 
+            summary: `(O formato da avaliação não foi reconhecido. Exibindo texto original da IA):\n\n${text}`, 
+            finalScore: finalScore 
+        };
     }
 
     return { sections, summary, finalScore };
@@ -95,6 +111,7 @@ const MeetingCard = ({ meeting }) => {
     const [expanded, setExpanded] = useState(false);
     const [modalOpen, setModalOpen] = useState(false);
 
+    // No `MeetingCard`, passamos o evaluation_text
     const { finalScore, summary } = parseEvaluationText(meeting.evaluation_text);
     const scoreColor = getScoreColor(finalScore);
 
@@ -102,7 +119,7 @@ const MeetingCard = ({ meeting }) => {
     const handleOpenModal = () => setModalOpen(true);
     const handleCloseModal = () => setModalOpen(false);
 
-    const isNotRealized = summary.toLowerCase().includes("não foi realizada") || finalScore === 0;
+    const isNotRealized = summary.toLowerCase().includes("não foi realizada") || finalScore === 0 && summary.toLowerCase().includes('não foi reconhecido');
 
     return (
         <Tooltip title={isNotRealized ? "Clique para mais detalhes" : "Clique para ver a avaliação detalhada"} placement="top" arrow>
@@ -127,7 +144,7 @@ const MeetingCard = ({ meeting }) => {
                             {meeting.meeting_title}
                         </Typography>
                         <Chip
-                            label={isNotRealized ? "Não Realizada" : `Nota: ${finalScore}`}
+                            label={isNotRealized ? "Não Processada" : `Nota: ${finalScore}`}
                             color={isNotRealized ? 'default' : scoreColor}
                             variant="filled"
                             icon={isNotRealized ? <ErrorOutlineIcon /> : null}
@@ -202,6 +219,7 @@ const MeetingCard = ({ meeting }) => {
                     </DialogTitle>
                     
                     <DialogContent dividers sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
+                        {/* Aqui passamos o evaluation_text para o componente filho */}
                         <EvaluationDetails evaluationText={meeting.evaluation_text} />
                     </DialogContent>
                     
