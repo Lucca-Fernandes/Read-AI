@@ -36,47 +36,70 @@ const StatusIcon = ({ status }) => {
 };
 
 // =======================================================================
-// NOVA FUNÇÃO parseEvaluationText (CORRIGIDA)
+// VERSÃO FINAL DA FUNÇÃO parseEvaluationText
 // =======================================================================
 const parseEvaluationText = (text) => {
     if (!text || typeof text !== 'string') {
         return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
     }
 
-    // Procura pela nota final primeiro, é o dado mais confiável
-    const finalScoreMatch = text.match(/^FINAL_SCORE:\s*(\d+)/m) || text.match(/Score Final Total:.*?=\s*(\d+)/);
-    const finalScore = finalScoreMatch ? parseInt(finalScoreMatch[1], 10) : 0;
-
-    // Procura pelo resumo
-    const summaryMatch = text.split(/---\s*\*\*Resumo da Análise:\*\*|^\*\*Resumo da Análise:\*\*/m);
-    let summary = summaryMatch.length > 1 ? summaryMatch[1].split('---')[0].trim() : 'Resumo não encontrado.';
-    
-    // Remove a linha FINAL_SCORE do resumo, se existir
-    summary = summary.replace(/^FINAL_SCORE:\s*\d+/m, '').trim();
-
-    // Se o texto indica que a reunião não foi realizada, retorna imediatamente
-    if (text.toLowerCase().includes("não foi realizada")) {
-      return { sections: [], summary: text, finalScore: 0 };
+    // 1. Extrai a Nota Final (procura por múltiplos padrões)
+    let finalScore = 0;
+    const scoreMatchers = [
+        /^FINAL_SCORE:\s*(\d+)/m,
+        /Score Final:\s*.*?=\s*\**(\d+)\**/m,
+        /Score Final Total:\s*.*?=\s*\**(\d+)\**/m,
+        /^\*\*Score Final:\*\*\s*(\d+)/m
+    ];
+    for (const matcher of scoreMatchers) {
+        const scoreMatch = text.match(matcher);
+        if (scoreMatch) {
+            finalScore = parseInt(scoreMatch[1], 10);
+            break;
+        }
     }
-    
+
+    // 2. Extrai o Resumo
+    let summary = 'Resumo não encontrado.';
+    const summarySplit = text.split(/\*\*Resumo da Análise:\*\*/m);
+    if (summarySplit.length > 1) {
+        summary = summarySplit[1].split(/---|\*\*Score Final|FINAL_SCORE/m)[0].trim();
+    }
+
+    if (text.toLowerCase().includes("não foi realizada")) {
+        return { sections: [], summary: text, finalScore: 0 };
+    }
+
+    // 3. Processa as seções e critérios do bloco de texto ANTES do resumo
+    const detailsBlock = summarySplit[0];
+    const lines = detailsBlock.split('\n').map(line => line.trim());
+
     const sections = [];
     let currentSection = null;
     let lastCriterion = null;
 
-    const lines = text.split('\n').map(line => line.trim());
+    // Cria uma seção padrão para agrupar critérios que aparecem antes de um cabeçalho de seção formal
+    const defaultSection = { title: "Critérios Gerais", criteria: [] };
+    sections.push(defaultSection);
+    currentSection = defaultSection;
+
+    const sectionRegex = /^\*\*\s*\d+\.\s*(.*?)\s*\(Peso Total: \d+ pontos\)\*\*/;
+    const criterionRegex = /^\s*-\s*(.*?)\s*\((\d+)\s*pontos\):\s*(-?\d+)/;
+    const evidenceRegex = /^(?:- Evidência:|\*Justificativa\*:)\s*(.*)/i;
 
     for (const line of lines) {
-        // Tenta identificar um cabeçalho de seção (ex: **1. Progresso do Aluno (Peso Total: 50 pontos)**)
-        const sectionMatch = line.match(/^\*\*\s*\d+\.\s*(.*?)\s*\(Peso Total: (\d+) pontos\)\*\*/);
+        const sectionMatch = line.match(sectionRegex);
         if (sectionMatch) {
-            if (currentSection) sections.push(currentSection);
-            currentSection = { title: sectionMatch[1].trim(), criteria: [] };
+            // Se encontrarmos uma seção de verdade, a criamos e a tornamos a seção atual
+            const newSection = { title: sectionMatch[1].trim(), criteria: [] };
+            sections.push(newSection);
+            currentSection = newSection;
+            lastCriterion = null;
             continue;
         }
-        
-        // Tenta identificar um critério de avaliação (ex: - Perguntou sobre a semana do aluno? (5 pontos): 5)
-        const criterionMatch = line.match(/^- (.*?)\s*\((\d+) pontos\):\s*(-?\d+)/);
-        if (criterionMatch && currentSection) {
+
+        const criterionMatch = line.match(criterionRegex);
+        if (criterionMatch) {
             const newCriterion = {
                 text: criterionMatch[1].trim(),
                 awardedPoints: criterionMatch[3].trim(),
@@ -84,29 +107,28 @@ const parseEvaluationText = (text) => {
                 justification: '',
             };
             currentSection.criteria.push(newCriterion);
-            lastCriterion = newCriterion; // Guarda a referência para o último critério
+            lastCriterion = newCriterion;
             continue;
         }
 
-        // Tenta identificar uma justificativa/evidência e associá-la ao critério anterior
-        const evidenceMatch = line.match(/^(?:- Evidência:|\*Justificativa\*:)\s*(.*)/);
+        const evidenceMatch = line.match(evidenceRegex);
         if (evidenceMatch && lastCriterion) {
             lastCriterion.justification = evidenceMatch[1].trim();
         }
     }
 
-    if (currentSection) sections.push(currentSection);
+    // Limpa seções que possam ter sido criadas mas permaneceram vazias
+    const finalSections = sections.filter(s => s.criteria.length > 0);
 
-    // Se, após tudo, nada for encontrado, retorna o estado de falha
-    if (sections.length === 0) {
+    if (finalSections.length === 0) {
         return { 
             sections: [], 
-            summary: `(O formato da avaliação não foi reconhecido. Exibindo texto original da IA):\n\n${text}`, 
+            summary: summary !== 'Resumo não encontrado.' ? summary : `(Formato não reconhecido):\n\n${text}`, 
             finalScore: finalScore 
         };
     }
 
-    return { sections, summary, finalScore };
+    return { sections: finalSections, summary, finalScore };
 };
 
 
