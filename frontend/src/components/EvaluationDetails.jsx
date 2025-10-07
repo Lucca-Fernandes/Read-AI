@@ -35,8 +35,13 @@ const StatusIcon = ({ status }) => {
   return icons[status] || <InfoIcon color="disabled" />;
 };
 
-// FUNÇÃO ATUALIZADA (CORRETA)
 const parseEvaluationText = (text) => {
+    // =======================================================================
+    // PASSO DE DEPURAÇÃO: A linha abaixo irá imprimir o texto da IA no console
+    // =======================================================================
+    console.log("--- TEXTO ORIGINAL DA IA PARA ANÁLISE ---", text);
+    // =======================================================================
+
     if (!text || typeof text !== 'string') {
         return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: 0 };
     }
@@ -68,11 +73,17 @@ const parseEvaluationText = (text) => {
         }
     }
     if (currentSection) sections.push(currentSection);
+
     if (sections.length === 0 && !summary && finalScore === 0) {
         if (text.toLowerCase().includes("não foi realizada")) {
             return { sections: [], summary: text, finalScore: 0 };
         }
-        return { sections: [], summary: 'O texto da avaliação não pôde ser analisado (formato irreconhecível).', finalScore: 0 };
+        // MELHORIA: Se falhar, exibe o texto original em vez de um erro genérico
+        return {
+            sections: [],
+            summary: `(O formato da avaliação não foi reconhecido. Exibindo texto original da IA):\n\n${text}`,
+            finalScore: 0
+        };
     }
     return { sections, summary, finalScore };
 };
@@ -86,12 +97,12 @@ const getScoreColor = (score) => {
 const EvaluationDetails = ({ evaluationText }) => {
   const { sections, summary, finalScore } = useMemo(() => parseEvaluationText(evaluationText), [evaluationText]);
 
-  if (sections.length === 0) {
+  if (sections.length === 0 && finalScore === 0) { // Lógica ajustada para exibir o fallback
     return (
-      <Paper elevation={2} sx={{ p: 3, textAlign: 'center' }}>
-        <InfoIcon color="action" sx={{ fontSize: 40, mb: 1 }} />
-        <Typography variant="h6">Informação da Reunião</Typography>
-        <Typography sx={{ mt: 1 }}>
+      <Paper elevation={2} sx={{ p: 3 }}>
+        <InfoIcon color="action" sx={{ fontSize: 40, mb: 1, display: 'block', margin: '0 auto' }} />
+        <Typography variant="h6" sx={{ textAlign: 'center' }}>Informação da Reunião</Typography>
+        <Typography sx={{ mt: 1, whiteSpace: 'pre-wrap', fontFamily: 'monospace', bgcolor: 'grey.100', p: 1, borderRadius: 1 }}>
           {summary || 'Não foi possível carregar os detalhes desta avaliação.'}
         </Typography>
       </Paper>
@@ -100,7 +111,6 @@ const EvaluationDetails = ({ evaluationText }) => {
 
   return (
     <Box>
-      {/* LAYOUT ORIGINAL RESTAURADO */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
             <Paper elevation={2} sx={{ p: 2, height: '100%' }}>
@@ -128,8 +138,7 @@ const EvaluationDetails = ({ evaluationText }) => {
             </Paper>
         </Grid>
       </Grid>
-
-      {/* DETALHAMENTO DOS CRITÉRIOS (Sem alteração) */}
+      
       {sections.map((section, index) => {
         const sectionScore = section.criteria.reduce((acc, item) => acc + Number(item.awardedPoints), 0);
         const maxScore = section.criteria.reduce((acc, item) => acc + Number(item.maxPoints), 0);
