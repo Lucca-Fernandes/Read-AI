@@ -406,9 +406,18 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
-// A Vercel gerencia a porta, então não precisamos mais de app.listen
-// const PORT = process.env.PORT || 3000;
-// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+// ... resto do código anterior ...
+
+// --- INICIALIZAÇÃO DO SERVIDOR ---
+
+// Esta verificação garante que o servidor inicie quando rodado localmente (node index.js)
+// mas não atrapalhe quando for exportado para a Vercel.
+if (require.main === module) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`🚀 Servidor rodando localmente na porta ${PORT}`);
+    });
+}
 
 // Exporta o app para a Vercel
 module.exports = app;

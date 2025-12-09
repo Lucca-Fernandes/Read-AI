@@ -22,17 +22,15 @@ import axios from 'axios';
 
 const monitorNames = [
     "Alex Fonseca",
-    "Eduardo Cotta Perdigão Pontes",
     "Ingrid Picorelle",
     "Natanael Hauck",
     "Douglas Freitas",
     "Isabela Jales",
-    "Lucas Fernandes Garcia",
     "Pedro Resende",
     "Talita Linhares",
-    "Gustavo Felippe Barbosa",
     "Ryan Cruz",
-    "Miguel Silva"
+    "Miguel Silva",
+    "Matheus Rodela"
 ];
 
 const AuthPage = () => {
