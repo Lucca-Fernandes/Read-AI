@@ -12,16 +12,14 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
-
-
+// --- CONFIGURAÇÃO DE CORS ---
 const allowedOrigins = [
     'http://localhost:5173',
-    process.env.FRONTEND_URL // Vamos criar essa variável de ambiente na Vercel
+    process.env.FRONTEND_URL 
 ];
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite requisições sem 'origin' (como de apps mobile ou Postman) e as da nossa lista.
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -30,20 +28,59 @@ app.use(cors({
     }
 }));
 
-
+// --- CONEXÃO COM O BANCO DE DADOS (NEON) ---
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
-        rejectUnauthorized: false
+        rejectUnauthorized: false // Obrigatório para Neon DB
     }
 });
 
-
+// --- CONFIGURAÇÃO GEMINI AI ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
 // --- FUNÇÕES AUXILIARES ---
 
+// 1. Função Inteligente para Corrigir Datas (Resolve o erro do Excel/Timestamp)
+const parseDate = (dateStr) => {
+    if (!dateStr) return null;
+    
+    // Converte para string e remove espaços
+    let cleanStr = String(dateStr).trim();
+
+    // A. DETECÇÃO DE FORMATO EXCEL (Números como 46000,70916)
+    if (/^\d+(?:[.,]\d+)?$/.test(cleanStr)) {
+        // Troca vírgula por ponto para o JavaScript entender como número decimal
+        const excelSerial = parseFloat(cleanStr.replace(',', '.'));
+        
+        // Datas Excel recentes são maiores que 30000
+        if (excelSerial > 30000) {
+            // (ExcelSerial - 25569) * 86400 * 1000 = Timestamp JS
+            return new Date((excelSerial - 25569) * 86400 * 1000);
+        }
+    }
+
+    // B. Tenta formato Brasileiro: DD/MM/YYYY ou DD/MM/YYYY HH:mm
+    const brDateRegex = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?.*$/;
+    const match = cleanStr.match(brDateRegex);
+
+    if (match) {
+        return new Date(
+            parseInt(match[3]),      // Ano
+            parseInt(match[2]) - 1,  // Mês
+            parseInt(match[1]),      // Dia
+            match[4] ? parseInt(match[4]) : 0, // Hora
+            match[5] ? parseInt(match[5]) : 0  // Minuto
+        );
+    }
+
+    // C. Tenta o padrão ISO ou US
+    const date = new Date(cleanStr);
+    return isNaN(date.getTime()) ? null : date;
+};
+
+// 2. Parser do Texto do Gemini
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
     return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
@@ -117,6 +154,7 @@ const parseEvaluationText = (text) => {
   }
 };
 
+// 3. Avaliação com Gemini
 const evaluateMeetingWithGemini = async (meeting) => {
     const nonConductedSummary = "No summary available due to limited meeting data.";
     if ((meeting.summary || '').trim() === nonConductedSummary) {
@@ -174,6 +212,7 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
     }
 };
 
+// 4. Busca da Planilha (Google Sheets)
 async function fetchFromSheets() {
     const API_KEY = process.env.GOOGLE_API_KEY;
     const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -183,11 +222,12 @@ async function fetchFromSheets() {
     const response = await axios.get(url);
     const rows = response.data.values || [];
     
+    // Ignora a primeira linha (cabeçalho) e usa o parseDate
     return rows.slice(1).map((row) => ({
         session_id: row[0] || 'unknown',
         meeting_title: row[1] || 'Sem título',
-        start_time: row[2] || null,
-        end_time: row[3] || null,
+        start_time: parseDate(row[2]), // Correção aqui
+        end_time: parseDate(row[3]),   // Correção aqui
         owner_name: row[4] ? row[4].trim() : 'Desconhecido',
         summary: row[5] || 'Sem resumo',
         topics: row[6] ? row[6].split(',').filter(t => t && t.toLowerCase() !== 'nenhum' && t.trim() !== '') : [],
@@ -271,6 +311,16 @@ app.post('/api/forgot-password', async (req, res) => {
             "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
             [token, expires, email]
         );
+        
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+
+        // --- EXIBIÇÃO DO LINK NO TERMINAL (MODO DEV) ---
+        console.log("\n========================================================");
+        console.log("📧 MODO DEV - LINK DE REDEFINIÇÃO DE SENHA:");
+        console.log(resetLink);
+        console.log("========================================================\n");
+        // -----------------------------------------------
+
         const transporter = nodemailer.createTransport({
             service: process.env.EMAIL_SERVICE,
             auth: {
@@ -278,10 +328,6 @@ app.post('/api/forgot-password', async (req, res) => {
                 pass: process.env.EMAIL_PASS,
             },
         });
-
-        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
-        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
-        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
         const mailOptions = {
             from: process.env.EMAIL_USER,
@@ -292,8 +338,15 @@ app.post('/api/forgot-password', async (req, res) => {
                   `${resetLink}\n\n` +
                   `Se você não solicitou isso, por favor, ignore este email e sua senha permanecerá inalterada.\n`
         };
-        await transporter.sendMail(mailOptions);
-        res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
+        
+        // Tenta enviar o email, mas se falhar (ex: bloqueio do Google), o link já apareceu no console
+        try {
+            await transporter.sendMail(mailOptions);
+        } catch (mailError) {
+            console.error("Erro ao enviar e-mail (provável bloqueio de credencial), mas o link foi gerado acima.", mailError.message);
+        }
+
+        res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado (ou gerado no log).' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao processar a solicitação.' });
@@ -406,9 +459,14 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
-// A Vercel gerencia a porta, então não precisamos mais de app.listen
-// const PORT = process.env.PORT || 3000;
-// app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+// --- INICIALIZAÇÃO DO SERVIDOR ---
+// Permite rodar localmente com "node index.js"
+if (require.main === module) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`🚀 Servidor rodando localmente na porta ${PORT}`);
+    });
+}
 
-// Exporta o app para a Vercel
+// Exporta o app para a Vercel (Serverless)
 module.exports = app;
