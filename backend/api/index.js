@@ -44,8 +44,6 @@ const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
 // --- FUNÇÕES AUXILIARES ---
 
-<<<<<<< Updated upstream
-=======
 // 1. Função Inteligente para Corrigir Datas
 const parseDate = (dateStr) => {
     if (!dateStr) return null;
@@ -80,7 +78,6 @@ const parseDate = (dateStr) => {
 };
 
 // 2. Parser do Texto do Gemini (CORRIGIDO E OTIMIZADO)
->>>>>>> Stashed changes
 const parseEvaluationText = (text) => {
   // Verificação de segurança
   if (!text || typeof text !== 'string') return { summary: 'Texto inválido.', finalScore: 0 };
@@ -156,10 +153,7 @@ Transcrição: ${meeting.transcript.substring(0, 20000)}`;
     }
 };
 
-<<<<<<< Updated upstream
-=======
 // 4. Busca da Planilha
->>>>>>> Stashed changes
 async function fetchFromSheets() {
     const API_KEY = process.env.GOOGLE_API_KEY;
     const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -169,30 +163,6 @@ async function fetchFromSheets() {
     const response = await axios.get(url);
     const rows = response.data.values || [];
     
-<<<<<<< Updated upstream
-    return rows.slice(1).map((row) => ({
-        session_id: row[0] || 'unknown',
-        meeting_title: row[1] || 'Sem título',
-        start_time: row[2] || null,
-        end_time: row[3] || null,
-        owner_name: row[4] ? row[4].trim() : 'Desconhecido',
-        summary: row[5] || 'Sem resumo',
-        topics: row[6] ? row[6].split(',').filter(t => t && t.toLowerCase() !== 'nenhum' && t.trim() !== '') : [],
-        sentiments: row[7] || 'Unknown',
-        report_url: row[8] || '',
-        chapters: row[9] ? row[9].split(';').filter(c => c).map(c => {
-            const parts = c.split(',').map(s => s.trim());
-            return { title: parts[0] || '', description: parts[1] || '' };
-        }) : [],
-        transcript: row[10] || '',
-        participants: (row[11] || '').split(',').reduce((acc, curr, i, arr) => {
-            if (i % 2 === 0 && arr[i + 1]) {
-                acc.push({ name: curr.trim(), email: arr[i + 1].trim() });
-            }
-            return acc;
-        }, [])
-    }));
-=======
     // Ignora cabeçalho e mapeia
     return rows.slice(1).map((row, index) => {
         const rawStart = row[2];
@@ -218,7 +188,6 @@ async function fetchFromSheets() {
             }, [])
         };
     });
->>>>>>> Stashed changes
 }
 
 // --- MIDDLEWARE AUTENTICAÇÃO ---
@@ -278,36 +247,6 @@ app.post('/api/forgot-password', async (req, res) => {
         if (userResult.rows.length === 0) return res.status(200).json({ message: 'E-mail enviado se existir.' });
         
         const token = crypto.randomBytes(32).toString('hex');
-<<<<<<< Updated upstream
-        const expires = new Date(Date.now() + 3600000); // 1 hora
-        await pool.query(
-            "UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3",
-            [token, expires, email]
-        );
-        const transporter = nodemailer.createTransport({
-            service: process.env.EMAIL_SERVICE,
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS,
-            },
-        });
-
-        // 👇 ALTERAÇÃO 2: LINK DE REDEFINIÇÃO DE SENHA 👇
-        // O link agora usa a variável de ambiente para apontar para o seu frontend em produção.
-        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
-
-        const mailOptions = {
-            from: process.env.EMAIL_USER,
-            to: user.email,
-            subject: 'Redefinição de Senha - Painel de Análises',
-            text: `Você está recebendo este email porque solicitou a redefinição da sua senha.\n\n` +
-                  `Por favor, clique no link abaixo ou cole no seu navegador para completar o processo:\n\n` +
-                  `${resetLink}\n\n` +
-                  `Se você não solicitou isso, por favor, ignore este email e sua senha permanecerá inalterada.\n`
-        };
-        await transporter.sendMail(mailOptions);
-        res.status(200).json({ message: 'Se um usuário com este email existir, um link de redefinição foi enviado.' });
-=======
         const expires = new Date(Date.now() + 3600000);
         await pool.query("UPDATE users SET reset_password_token = $1, reset_password_expires = $2 WHERE email = $3", [token, expires, email]);
         
@@ -324,7 +263,6 @@ app.post('/api/forgot-password', async (req, res) => {
         } catch (e) { console.error("Erro email:", e); }
 
         res.status(200).json({ message: 'E-mail enviado.' });
->>>>>>> Stashed changes
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao processar.' });
@@ -439,23 +377,10 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
-<<<<<<< Updated upstream
-// ... resto do código anterior ...
-
-// --- INICIALIZAÇÃO DO SERVIDOR ---
-
-// Esta verificação garante que o servidor inicie quando rodado localmente (node index.js)
-// mas não atrapalhe quando for exportado para a Vercel.
-=======
 // --- INICIALIZAÇÃO ---
->>>>>>> Stashed changes
 if (require.main === module) {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
 }
 
-<<<<<<< Updated upstream
-// Exporta o app para a Vercel
-=======
->>>>>>> Stashed changes
 module.exports = app;
