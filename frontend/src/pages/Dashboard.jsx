@@ -17,6 +17,8 @@ import MeetingCard from '../components/MeetingCard';
 import Filters from '../components/Filters';
 import DashboardChart from '../components/DashboardChart';
 import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 
 const Dashboard = () => {
   const { user, logout, token } = useAuth();
@@ -30,6 +32,7 @@ const Dashboard = () => {
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
   const [chartData, setChartData] = useState([]);
+  const navigate = useNavigate();
 
   const fetchMeetings = useCallback(async (start, end) => {
     setLoading(true);
@@ -145,13 +148,39 @@ const Dashboard = () => {
 
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, maxWidth: 1600, mx: 'auto' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
-          <Typography variant="h6">
-              Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
-          </Typography>
-          <Button variant="outlined" color="secondary" onClick={logout}>
-              Sair
+      <Box sx={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        mb: 3, 
+        flexWrap: 'wrap', 
+        gap: 2 
+      }}>
+        <Typography variant="h6">
+          Bem-vindo(a), <strong>{user?.name}</strong> ({user?.role})
+        </Typography>
+
+        {/* Agrupador de botões de ação à direita */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {user?.role === 'admin' && (
+            <Button 
+              variant="outlined" 
+              color="primary"
+              startIcon={<AdminPanelSettingsIcon />}
+              onClick={() => navigate('/admin')}
+            >
+              Painel Admin
+            </Button>
+          )}
+          
+          <Button 
+            variant="outlined" 
+            color="secondary" 
+            onClick={logout}
+          >
+            Sair
           </Button>
+        </Box>
       </Box>
 
       <Fade in timeout={800}>

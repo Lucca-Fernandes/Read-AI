@@ -40,7 +40,7 @@ const pool = new Pool({
 
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
 // --- FUNÇÕES AUXILIARES ---
 
@@ -79,77 +79,105 @@ const parseDate = (dateStr) => {
 
 // 2. Parser do Texto do Gemini (CORRIGIDO E OTIMIZADO)
 const parseEvaluationText = (text) => {
-  // Verificação de segurança
-  if (!text || typeof text !== 'string') return { summary: 'Texto inválido.', finalScore: 0 };
+  if (!text || typeof text !== 'string') return { summary: 'Texto inválido.', finalScore: 0, sentimentScore: 0, engagementScore: 0 };
   
   try {
-    let finalScore = 0;
-
-    // --- REGEX ROBUSTA PARA CAPTURAR A NOTA ---
-    // Procura por "FINAL_SCORE: 94" (case insensitive)
+    // Regex robustas para os 3 scores
     const scoreMatch = text.match(/FINAL_SCORE[\s:*]*(\d+)/i);
+    const sentimentMatch = text.match(/SENTIMENT_SCORE[\s:*]*(\d+)/i);
+    const engagementMatch = text.match(/ENGAGEMENT_SCORE[\s:*]*(\d+)/i);
 
-    if (scoreMatch && scoreMatch[1]) {
-      finalScore = parseInt(scoreMatch[1], 10);
-    } else {
-        // Fallback: Tenta achar apenas "Nota: 94" se o padrão principal falhar
-        const fallbackMatch = text.match(/Nota[\s:*]*(\d+)/i);
-        if (fallbackMatch && fallbackMatch[1]) {
-            finalScore = parseInt(fallbackMatch[1], 10);
-        }
-    }
-
-    // Extrai o resumo (pega tudo após "**Resumo da Análise:**" até o próximo título)
-    const summaryMatch = text.match(/\*\*Resumo da Análise:\*\*([\s\S]*?)(?=(?:FINAL_|CRITÉRIOS|1\.|$))/i);
-    let summary = summaryMatch ? summaryMatch[1].trim() : '';
+    // Extrai o resumo
+    const summaryMatch = text.match(/\*\*Resumo da Análise:\*\*([\s\S]*?)(?=(?:FINAL_|SENTIMENT_|ENGAGEMENT_|CRITÉRIOS|1\.|$))/i);
     
-    // Fallback para o resumo
-    if (!summary) summary = text.substring(0, 200) + "..."; 
-
-    return { summary, finalScore };
-
+    return {
+        finalScore: scoreMatch ? parseInt(scoreMatch[1], 10) : 0,
+        sentimentScore: sentimentMatch ? parseInt(sentimentMatch[1], 10) : 0,
+        engagementScore: engagementMatch ? parseInt(engagementMatch[1], 10) : 0,
+        summary: summaryMatch ? summaryMatch[1].trim() : text.substring(0, 200) + "..."
+    };
   } catch (error) {
-    console.error("Erro no parser (retornando 0):", error); 
-    return { summary: 'Erro no processamento.', finalScore: 0 };
+    console.error("Erro no parser:", error);
+    return { summary: 'Erro no processamento.', finalScore: 0, sentimentScore: 0, engagementScore: 0 };
   }
 };
 
 const evaluateMeetingWithGemini = async (meeting) => {
-    // Validação básica se tem transcrição
     if (!meeting.transcript || meeting.transcript.length < 50) {
-         return { score: 0, evaluationText: 'Transcrição insuficiente ou ausente.' };
+         return { score: 0, sentimentScore: 0, engagementScore: 0, evaluationText: 'Transcrição insuficiente.' };
     }
 
     try {
-        const prompt = `Analise a transcrição da reunião de monitoria baseada estritamente nos diálogos.
-IMPORTANTE: Sua resposta DEVE terminar EXATAMENTE com a linha: "FINAL_SCORE: X", onde X é a nota somada (0 a 100).
+       const prompt = `
+--- IDENTIFICAÇÃO DE PAPÉIS (OBRIGATÓRIO) ---
+1. MONITOR/AGENTE: ${meeting.owner_name}. Ele conduz, explica e cobra.
+2. ALUNO/CLIENTE: O outro participante que recebe a instrução.
+O monitor é o instrutor; o aluno é o aprendiz. Não inverta os papéis.
 
-**CRITÉRIOS DE PONTUAÇÃO:**
-1. Progresso (50 pts): Semana do aluno(5), Meta anterior(10), Nova meta(10), Conteúdo(20), Exercícios(5).
-2. Qualidade (15 pts): Dúvidas(10), Organização(5).
-3. Engajamento (15 pts): Incentivo(5), Importância encontros(5), Apoio extra(5).
-4. Risco (10 pts): Condução de casos de risco.
-5. Feedback (10 pts): Reconhecimento de conquistas.
+--- MISSÃO DE ANÁLISE ---
+Avalie o desempenho do MONITOR e o comportamento do ALUNO com base na transcrição. Seja criterioso. Se algo não foi dito, a nota é zero, exceto onde houver regra de exceção explícita abaixo.
 
-Responda no formato:
-**Resumo da Análise:** [Seu resumo aqui]
-[Critérios detalhados...]
-FINAL_SCORE: [Nota]
+**REGRAS DE PONTUAÇÃO DO MONITOR (Total 100 pts):**
 
---- DADOS ---
-Resumo Original: ${meeting.summary}
-Transcrição: ${meeting.transcript.substring(0, 20000)}`; 
-        
+1. PROGRESSO (50 pts): 
+   - Validou a semana/rotina (5 pts)
+   - Revisou meta anterior (10 pts)
+   - Definiu nova meta (10 pts)
+   - Explicou/Orientou conteúdo (20 pts)
+   - Status de Exercícios (5 pts): O monitor deve PERGUNTAR se o aluno fez ou teve dificuldade nos exercícios. (Nota: Ele não precisa passar novos, apenas monitorar os atuais).
+
+2. QUALIDADE (15 pts):
+   - Resolução de Dúvidas (10 pts): 
+     * REGRA DE OURO: SE o aluno não apresentou dúvidas, o monitor GANHA os 10 pts pela proatividade. SE o aluno teve dúvida e o monitor não resolveu ou enrolou, a nota é 0.
+   - Organização (5 pts): Demonstrou ter um roteiro e controle do tempo.
+
+3. ENGAJAMENTO DO AGENTE (15 pts):
+   - Incentivo Positivo (5 pts)
+   - Reforçou importância dos encontros (5 pts)
+   - Ofereceu apoio extra/disponibilidade (5 pts)
+
+4. RISCO (10 pts):
+   - Identificou sinais de desânimo, sumiço ou dificuldade crítica e agiu para motivar/reter o aluno.
+
+5. FEEDBACK (10 pts):
+   - Reconhecimento: Elogiou nominalmente uma conquista, tarefa feita ou a persistência do aluno.
+
+--- MÉTRICAS DE COMPORTAMENTO DO ALUNO (OBRIGATÓRIO) ---
+Avalie o aluno de 0 a 100:
+- SENTIMENT_SCORE: Humor, satisfação e tom de voz (0 = Irritado/Desanimado, 100 = Empolgado/Satisfeito).
+- ENGAGEMENT_SCORE: Participação ativa (0 = Monossilábico/Passivo, 100 = Proativo/Questionador).
+
+--- FORMATO DE RESPOSTA (OBRIGATÓRIO - NÃO ALTERAR TAGS) ---
+**Resumo da Análise:** [Resumo assertivo de 3-5 linhas sobre a dinâmica da reunião]
+
+**Detalhamento por Critério:**
+1. Progresso: [Nota]/50 - [Justificativa]
+2. Qualidade: [Nota]/15 - [Justificativa]
+3. Engajamento: [Nota]/15 - [Justificativa]
+4. Risco: [Nota]/10 - [Justificativa]
+5. Feedback: [Nota]/10 - [Justificativa]
+
+SENTIMENT_SCORE: [Nota]
+ENGAGEMENT_SCORE: [Nota]
+FINAL_SCORE: [Soma dos itens 1 a 5]
+
+--- DADOS DA REUNIÃO ---
+Monitor: ${meeting.owner_name}
+Transcrição: ${meeting.transcript.substring(0, 25000)}`;
+
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
+        const parsed = parseEvaluationText(responseText); // Aqui pegamos os 3 scores
         
-        // Passa apenas o texto para o parser
-        const { finalScore } = parseEvaluationText(responseText);
-        
-        return { score: finalScore, evaluationText: responseText };
+        return { 
+            score: parsed.finalScore, 
+            sentimentScore: parsed.sentimentScore, 
+            engagementScore: parsed.engagementScore, 
+            evaluationText: responseText 
+        };
     } catch (err) {
-        console.error(`Erro Gemini ID ${meeting.session_id}:`, err.message);
-        return { score: 0, evaluationText: `FALHA IA: ${err.message}` };
+        console.error("Erro Gemini:", err.message);
+        return { score: 0, sentimentScore: 0, engagementScore: 0, evaluationText: `FALHA IA: ${err.message}` };
     }
 };
 
@@ -331,44 +359,46 @@ app.post('/api/update', authenticateToken, async (req, res) => {
 
         console.log(`Iniciando avaliação de ${newMeetings.length} reuniões...`);
 
-        // 3. Avalia com Gemini (Processamento Paralelo)
+       // 3. Avalia com Gemini (Processamento Paralelo)
         const evaluated = await Promise.all(newMeetings.map(async (m) => {
-            const { score, evaluationText } = await evaluateMeetingWithGemini(m);
-            return { ...m, score, evaluation_text: evaluationText };
+            const result = await evaluateMeetingWithGemini(m);
+            return { 
+                ...m, 
+                score: result.score, 
+                evaluation_text: result.evaluationText,
+                sentiment_score: result.sentimentScore,
+                engagement_score: result.engagementScore
+            };
         }));
 
         // 4. Inserção no Banco
         for (const m of evaluated) {
-            // Cálculo de duração em minutos
-            let duration = 0;
-            if (m.start_time && m.end_time) {
-                const diffMs = m.end_time.getTime() - m.start_time.getTime();
-                duration = Math.floor(diffMs / 60000);
-            }
-            // Garante que a duração nunca seja NaN
+            let duration = (m.start_time && m.end_time) ? Math.floor((m.end_time - m.start_time) / 60000) : 0;
             if (isNaN(duration)) duration = 0;
-
-            console.log(`Inserindo ${m.session_id} - Duração: ${duration}min - Score Detectado: ${m.score}`);
 
             await pool.query(`
                 INSERT INTO meetings (
                     session_id, meeting_title, owner_name, summary, topics, sentiments,
                     chapters, transcript, participants, start_time, end_time, duration_minutes,
-                    report_url, score, evaluation_text
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    report_url, score, evaluation_text, sentiment_score, engagement_score
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 ON CONFLICT (session_id) DO UPDATE SET
                     score = EXCLUDED.score,
                     evaluation_text = EXCLUDED.evaluation_text,
-                    summary = EXCLUDED.summary,
-                    duration_minutes = EXCLUDED.duration_minutes
+                    sentiment_score = EXCLUDED.sentiment_score,
+                    engagement_score = EXCLUDED.engagement_score,
+                    duration_minutes = EXCLUDED.duration_minutes,
+                    summary = EXCLUDED.summary
             `, [
                 m.session_id, m.meeting_title, m.owner_name, m.summary,
                 JSON.stringify(m.topics), m.sentiments,
                 JSON.stringify(m.chapters), m.transcript,
                 JSON.stringify(m.participants),
                 m.start_time, m.end_time, duration,
-                m.report_url, m.score, m.evaluation_text
+                m.report_url, m.score, m.evaluation_text,
+                m.sentiment_score, m.engagement_score
             ]);
+        
         }
         res.json({ message: `Processamento concluído. Adicionadas: ${evaluated.length}` });
     } catch (err) {

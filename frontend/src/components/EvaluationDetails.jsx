@@ -14,7 +14,6 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import InfoIcon from '@mui/icons-material/Info';
-import GppBadIcon from '@mui/icons-material/GppBad';
 import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import ScoreboardIcon from '@mui/icons-material/Scoreboard';
 
@@ -36,7 +35,7 @@ const StatusIcon = ({ status }) => {
   return icons[status] || <InfoIcon color="disabled" />;
 };
 
-// --- PARSER INTELIGENTE (ADAPTADO AOS DIVERSOS PADRÕES DO GEMINI) ---
+// --- PARSER INTELIGENTE ---
 const parseEvaluationText = (text, dbScore) => {
   if (!text || typeof text !== 'string') {
     return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: dbScore || 0, rawText: null };
@@ -46,32 +45,27 @@ const parseEvaluationText = (text, dbScore) => {
     const lines = text.split('\n').filter(line => line.trim() !== '');
     const sections = [];
     let currentSection = null;
-    let summary = '';
+    let extractedSummary = '';
 
     // 1. Extração do Resumo
     const summaryRegex = /\*\*Resumo da Análise:\*\*([\s\S]*?)(?=(?:FINAL_SCORE:|CRITÉRIOS|\d+\.|[*]{2}))/i;
     const summaryMatch = text.match(summaryRegex);
     if (summaryMatch) {
-      summary = summaryMatch[1].trim();
+      extractedSummary = summaryMatch[1].trim();
     } else {
-       // Fallback se não achar o cabeçalho exato
-       summary = text.substring(0, 250) + "...";
+       extractedSummary = text.substring(0, 250) + "...";
     }
 
     // 2. Loop pelas linhas para montar as seções
     lines.forEach(line => {
       const cleanLine = line.trim();
 
-      // PADRÃO DE CABEÇALHO (Ex: "1. **Progresso (50 pts):**" ou "**Qualidade (15 pts)**")
-      // Regex captura: (Numeração opcional) (Nome do Título) (Pontos Máximos)
+      // PADRÃO DE CABEÇALHO (Ex: "1. **Progresso (50 pts):**")
       const headerRegex = /(?:^\d+\.|^[*]+)?\s*\**([A-Za-zÀ-ÿ\s]+?)\s*\**\s*\(\s*(\d+)\s*(?:pts|pontos|Peso Total: \d+)\s*\)\s*\**:?/i;
       const headerMatch = cleanLine.match(headerRegex);
 
       if (headerMatch) {
-        // Se já tinha uma seção aberta, salva ela
         if (currentSection) sections.push(currentSection);
-        
-        // Inicia nova seção
         currentSection = { 
           title: headerMatch[1].trim(), 
           maxPoints: parseInt(headerMatch[2], 10), 
@@ -80,10 +74,7 @@ const parseEvaluationText = (text, dbScore) => {
         return;
       }
       
-      // PADRÃO DE CRITÉRIO (Ex: "* **Semana do aluno (5/5):** Texto..." ou "- Dúvidas (10 pontos): 8")
-      // Tenta capturar formato "Nota/Max" (5/5) ou formato "X pontos: Y"
-      
-      // Caso 1: Formato "Critério (X/Y): Justificativa" (Comum no seu JSON)
+      // PADRÃO DE CRITÉRIO (Ex: "* **Semana do aluno (5/5):** Texto...")
       const criteriaSlashRegex = /^[\*\-]\s*\**([^\(]+?)\s*\**\s*\(\s*(\d+)\s*[\/]\s*(\d+)\s*\)\s*\**:\s*(.*)/i;
       const slashMatch = cleanLine.match(criteriaSlashRegex);
 
@@ -112,23 +103,19 @@ const parseEvaluationText = (text, dbScore) => {
       }
     });
 
-    // Adiciona a última seção encontrada
     if (currentSection) sections.push(currentSection);
 
-    // Se não achou nenhuma seção (parsing falhou totalmente), retorna rawText para não ficar em branco
     if (sections.length === 0) {
-        return { sections: [], summary, finalScore: dbScore || 0, rawText: text };
+        return { sections: [], summary: extractedSummary, finalScore: dbScore || 0, rawText: text };
     }
 
-    // Calcula nota baseada na soma dos critérios encontrados
     const calculatedScore = sections.reduce((total, section) => {
       return total + section.criteria.reduce((sectionSum, crit) => sectionSum + crit.awardedPoints, 0);
     }, 0);
 
-    // Se a nota calculada for muito diferente da nota do banco (ou zero), prefere a do banco
     const finalScoreToUse = (calculatedScore === 0 && dbScore) ? dbScore : calculatedScore;
 
-    return { sections, summary, finalScore: finalScoreToUse, rawText: null };
+    return { sections, summary: extractedSummary, finalScore: finalScoreToUse, rawText: null };
 
   } catch (error) {
     console.error("Erro no parser:", error);
@@ -136,19 +123,17 @@ const parseEvaluationText = (text, dbScore) => {
   }
 };
 
-// --- COMPONENTE PRINCIPAL (MANTENDO SEU ESTILO VISUAL) ---
+// --- COMPONENTE PRINCIPAL ---
 const EvaluationDetails = ({ evaluationText, dbScore }) => {
-  // Passamos dbScore para garantir que a nota grande esteja sempre certa
   const { sections, summary, finalScore, rawText } = useMemo(
     () => parseEvaluationText(evaluationText, dbScore), 
     [evaluationText, dbScore]
   );
 
-  // Se o parser não conseguiu identificar seções, mostra o texto cru formatado
   if (rawText) {
     return (
         <Box>
-             <Paper elevation={2} sx={{ p: 2, mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#fff3e0' }}>
+            <Paper elevation={2} sx={{ p: 2, mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#fff3e0' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <InfoIcon color="warning" />
                     <Typography variant="h6" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>
@@ -166,7 +151,6 @@ const EvaluationDetails = ({ evaluationText, dbScore }) => {
     );
   }
 
-  // Renderização Visual Padrão (Bonita)
   return (
     <Box>
       <Paper elevation={2} sx={{ p: 2, mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(45deg, #e3f2fd 30%, #e8eaf6 90%)' }}>
