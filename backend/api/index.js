@@ -283,7 +283,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- ROTAS DE REDEFINIÇÃO DE SENHA ---
 
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
@@ -366,7 +365,6 @@ app.post('/api/reset-password/:token', async (req, res) => {
     }
 });
 
-// --- MIDDLEWARE DE AUTENTICAÇÃO ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -374,14 +372,13 @@ const authenticateToken = (req, res, next) => {
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) {
             console.error('Erro na verificação do token:', err);
-            return res.sendStatus(403); // Forbidden
+            return res.sendStatus(403); 
         }
         req.user = user;
         next();
     });
 };
 
-// --- ROTAS DA APLICAÇÃO ---
 
 app.get('/api/meetings', authenticateToken, async (req, res) => {
     try {
@@ -447,8 +444,7 @@ app.post('/api/update', authenticateToken, async (req, res) => {
     }
 });
 
-// --- INICIALIZAÇÃO DO SERVIDOR ---
-// Permite rodar localmente com "node index.js"
+
 if (require.main === module) {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
@@ -456,5 +452,4 @@ if (require.main === module) {
     });
 }
 
-// Exporta o app para a Vercel (Serverless)
 module.exports = app;
