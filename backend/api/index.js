@@ -28,7 +28,7 @@ app.use(cors({
     }
 }));
 
-// --- CONEXÃO COM O BANCO DE DADOS (NEON) ---
+
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
