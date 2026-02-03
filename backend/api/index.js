@@ -59,15 +59,15 @@ const parseDate = (dateStr) => {
 
     if (match) {
         return new Date(
-            parseInt(match[3]),      // Ano
-            parseInt(match[2]) - 1,  // Mês
-            parseInt(match[1]),      // Dia
-            match[4] ? parseInt(match[4]) : 0, // Hora
-            match[5] ? parseInt(match[5]) : 0  // Minuto
+            parseInt(match[3]),      
+            parseInt(match[2]) - 1,  
+            parseInt(match[1]),      
+            match[4] ? parseInt(match[4]) : 0, 
+            match[5] ? parseInt(match[5]) : 0  
         );
     }
 
-    // C. Tenta o padrão ISO ou US
+    
     const date = new Date(cleanStr);
     return isNaN(date.getTime()) ? null : date;
 };
