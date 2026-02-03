@@ -72,7 +72,6 @@ const parseDate = (dateStr) => {
     return isNaN(date.getTime()) ? null : date;
 };
 
-// 2. Parser do Texto do Gemini
 const parseEvaluationText = (text) => {
   if (!text || typeof text !== 'string') {
     return { sections: [], summary: 'Texto de avaliação inválido ou ausente.', finalScore: -1 };
@@ -216,8 +215,8 @@ async function fetchFromSheets() {
     return rows.slice(1).map((row) => ({
         session_id: row[0] || 'unknown',
         meeting_title: row[1] || 'Sem título',
-        start_time: parseDate(row[2]), // Correção aqui
-        end_time: parseDate(row[3]),   // Correção aqui
+        start_time: parseDate(row[2]), 
+        end_time: parseDate(row[3]),   
         owner_name: row[4] ? row[4].trim() : 'Desconhecido',
         summary: row[5] || 'Sem resumo',
         topics: row[6] ? row[6].split(',').filter(t => t && t.toLowerCase() !== 'nenhum' && t.trim() !== '') : [],
@@ -237,7 +236,6 @@ async function fetchFromSheets() {
     }));
 }
 
-// --- ROTAS DE AUTENTICAÇÃO ---
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'monitor' } = req.body;
