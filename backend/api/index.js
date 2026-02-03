@@ -46,9 +46,8 @@ const parseDate = (dateStr) => {
     // Converte para string e remove espaços
     let cleanStr = String(dateStr).trim();
 
-    // A. DETECÇÃO DE FORMATO EXCEL (Números como 46000,70916)
     if (/^\d+(?:[.,]\d+)?$/.test(cleanStr)) {
-        // Troca vírgula por ponto para o JavaScript entender como número decimal
+        
         const excelSerial = parseFloat(cleanStr.replace(',', '.'));
         
         // Datas Excel recentes são maiores que 30000
