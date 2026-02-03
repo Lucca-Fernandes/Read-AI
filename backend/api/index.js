@@ -12,7 +12,7 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
-// --- CONFIGURAÇÃO DE CORS ---
+
 const allowedOrigins = [
     'http://localhost:5173',
     process.env.FRONTEND_URL 
