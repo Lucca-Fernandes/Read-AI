@@ -48,14 +48,12 @@ const parseDate = (dateStr) => {
         
         const excelSerial = parseFloat(cleanStr.replace(',', '.'));
         
-        // Datas Excel recentes são maiores que 30000
         if (excelSerial > 30000) {
-            // (ExcelSerial - 25569) * 86400 * 1000 = Timestamp JS
+           
             return new Date((excelSerial - 25569) * 86400 * 1000);
         }
     }
 
-    // B. Tenta formato Brasileiro: DD/MM/YYYY ou DD/MM/YYYY HH:mm
     const brDateRegex = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?.*$/;
     const match = cleanStr.match(brDateRegex);
 
