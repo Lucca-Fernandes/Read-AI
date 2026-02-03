@@ -204,7 +204,6 @@ TRANSCRIÇÃO COMPLETA (Fonte Principal): ${meeting.transcript}`;
     }
 };
 
-// 4. Busca da Planilha (Google Sheets)
 async function fetchFromSheets() {
     const API_KEY = process.env.GOOGLE_API_KEY;
     const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -214,7 +213,6 @@ async function fetchFromSheets() {
     const response = await axios.get(url);
     const rows = response.data.values || [];
     
-    // Ignora a primeira linha (cabeçalho) e usa o parseDate
     return rows.slice(1).map((row) => ({
         session_id: row[0] || 'unknown',
         meeting_title: row[1] || 'Sem título',
