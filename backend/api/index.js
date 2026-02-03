@@ -39,11 +39,9 @@ const pool = new Pool({
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-// 1. Função Inteligente para Corrigir Datas (Resolve o erro do Excel/Timestamp)
 const parseDate = (dateStr) => {
     if (!dateStr) return null;
     
-    // Converte para string e remove espaços
     let cleanStr = String(dateStr).trim();
 
     if (/^\d+(?:[.,]\d+)?$/.test(cleanStr)) {
